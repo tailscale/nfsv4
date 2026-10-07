@@ -46,7 +46,10 @@ type FS interface {
 	//
 	// The want mask says which attributes the client asked for. It's a
 	// hint: implementations may use it to skip expensive work, but may
-	// also return attributes that weren't asked for. Attributes the
+	// also return attributes that weren't asked for. It always includes
+	// the basic attributes (type, change, size, fileid, mode, numlinks,
+	// owner, owner_group, and the times), so it's mostly useful for
+	// skipping work for clients that only want those. Attributes the
 	// server computes itself (such as lease_time) are never in want.
 	GetAttr(r *Request, fh FileHandle, want AttrMask) (*Attrs, error)
 

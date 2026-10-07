@@ -331,6 +331,23 @@ func (cp *compound) setFH(fh FileHandle, attrs *Attrs) {
 	}
 }
 
+// basicAttrs are the attributes always included in the want mask passed to
+// FS.GetAttr, so that the attributes fetched for one operation can be
+// reused by the next ones in the same COMPOUND.
+var basicAttrs = MakeAttrMask(
+	AttrType,
+	AttrChange,
+	AttrSize,
+	AttrFileID,
+	AttrMode,
+	AttrNumLinks,
+	AttrOwner,
+	AttrOwnerGroup,
+	AttrTimeModify,
+	AttrTimeMetadata,
+	AttrTimeAccess,
+)
+
 var allAttrs = func() AttrMask {
 	var m AttrMask
 	for i := range m.w {
@@ -345,7 +362,7 @@ func (cp *compound) getAttrs(want AttrMask) (*Attrs, Status) {
 	if st := cp.needFH(); st != OK {
 		return nil, st
 	}
-	want = want.AndNot(serverAttrs)
+	want = want.AndNot(serverAttrs).Or(basicAttrs)
 	if cp.curAttrs != nil && cp.curAttrsWant.ContainsAll(want) {
 		return cp.curAttrs, OK
 	}

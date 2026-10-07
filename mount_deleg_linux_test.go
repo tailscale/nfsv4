@@ -1,0 +1,134 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+package nfsv4_test
+
+import (
+	"context"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tailscale/nfsv4"
+)
+
+func TestKernelDelegations(t *testing.T) {
+	fs := newTestTree()
+	fs.WriteFile("/live/data.txt", []byte("version 1\n"), 0o644)
+	fs.DelegatePolicy = func(path string, a *nfsv4.Attrs) nfsv4.Delegation {
+		return nfsv4.Delegation{Grant: true}
+	}
+	srv := &nfsv4.Server{FS: fs.WithDelegator(), Logf: t.Logf}
+	// actimeo=1 makes the client revalidate undelegated objects after a
+	// second, so we can tell delegations are working.
+	dir := mountServer(t, srv, "vers=4.2,actimeo=1")
+
+	// Open and read files, and list directories, to get delegations.
+	for _, p := range []string{"/hello.txt", "/sub/dir/file.go", "/live/data.txt"} {
+		if _, err := os.ReadFile(dir + p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{"/", "/sub", "/sub/dir", "/many", "/live"} {
+		if _, err := os.ReadDir(dir + p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Stat again so the client revalidates directories and asks for
+	// directory delegations (Linux requests them on GETATTR after
+	// ACCESS).
+	for _, p := range []string{"/sub", "/sub/dir", "/many", "/live"} {
+		if _, err := os.Stat(dir + p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(1500 * time.Millisecond)
+	for _, p := range []string{"/sub", "/sub/dir", "/many", "/live", "/hello.txt"} {
+		os.Stat(dir + p)
+		os.ReadDir(dir + p)
+	}
+	st := srv.Stats()
+	t.Logf("after warmup: %+v", st)
+	if st.Delegations == 0 {
+		t.Fatalf("no delegations granted")
+	}
+	if st.Ops[nfsv4.OpGetDirDelegation] == 0 {
+		t.Errorf("client never asked for a directory delegation")
+	}
+
+	// Now, with everything delegated, repeated access past the
+	// attribute cache timeout shouldn't cause any GETATTR, LOOKUP,
+	// ACCESS, or READDIR.
+	time.Sleep(1500 * time.Millisecond)
+	before := srv.Stats()
+	for range 3 {
+		for _, p := range []string{"/hello.txt", "/sub/dir/file.go", "/live/data.txt"} {
+			if _, err := os.ReadFile(dir + p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, p := range []string{"/sub", "/sub/dir", "/many"} {
+			if _, err := os.ReadDir(dir + p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(1100 * time.Millisecond)
+	}
+	after := srv.Stats()
+	for _, op := range []nfsv4.Op{nfsv4.OpGetAttr, nfsv4.OpLookup, nfsv4.OpAccess, nfsv4.OpReadDir, nfsv4.OpOpen, nfsv4.OpRead} {
+		if d := after.Ops[op] - before.Ops[op]; d != 0 {
+			t.Errorf("%v ops while delegated: %d", op, d)
+		}
+	}
+	t.Logf("ops while delegated: %v", diffOps(before, after))
+
+	// Change a live file and invalidate it. The client must see the new
+	// contents.
+	fs.WriteFile("/live/data.txt", []byte("version 2, longer\n"), 0o644)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Invalidate(ctx, fs.Handle("/live/data.txt")); err != nil {
+		t.Fatalf("Invalidate: %v", err)
+	}
+	got, err := os.ReadFile(dir + "/live/data.txt")
+	if err != nil || string(got) != "version 2, longer\n" {
+		t.Errorf("after invalidate: %q, %v", got, err)
+	}
+
+	// Add a file to a delegated directory and invalidate the directory.
+	// The client must see the new entry.
+	fs.WriteFile("/sub/dir/new.go", []byte("package new\n"), 0o444)
+	if err := srv.Invalidate(ctx, fs.Handle("/sub/dir")); err != nil {
+		t.Fatalf("Invalidate: %v", err)
+	}
+	ents, err := os.ReadDir(dir + "/sub/dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, ",") != "file.go,new.go" {
+		t.Errorf("after invalidate, ReadDir = %q", names)
+	}
+	if _, err := os.Stat(dir + "/sub/dir/new.go"); err != nil {
+		t.Errorf("stat new file: %v", err)
+	}
+	st = srv.Stats()
+	t.Logf("final: %+v", st)
+	if st.Revocations != 0 {
+		t.Errorf("revocations = %d", st.Revocations)
+	}
+}
+
+func diffOps(a, b nfsv4.Stats) map[nfsv4.Op]uint64 {
+	m := map[nfsv4.Op]uint64{}
+	for op, n := range b.Ops {
+		if d := n - a.Ops[op]; d > 0 {
+			m[op] = d
+		}
+	}
+	return m
+}
