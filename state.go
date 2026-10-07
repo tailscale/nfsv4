@@ -5,6 +5,7 @@ package nfsv4
 
 import (
 	"context"
+	"fmt"
 	"crypto/rand"
 	"encoding/binary"
 	"sync"
@@ -477,4 +478,8 @@ func (m *stateManager) reap(now time.Time) {
 			m.destroyClientLocked(cl)
 		}
 	}
+}
+
+func (sid stateID) String() string {
+	return fmt.Sprintf("%d:%x", sid.seqid, sid.other[:])
 }

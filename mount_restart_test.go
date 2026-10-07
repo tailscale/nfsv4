@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build linux || darwin
+
 package nfsv4_test
 
 import (
@@ -45,7 +47,7 @@ func TestKernelServerRestart(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	srv1 := &nfsv4.Server{FS: newRestartTree(), Logf: t.Logf}
 	go srv1.Serve(ln)
-	dir := mountPort(t, port, "vers=4.2")
+	dir := mountPort(t, port, latestVersion(), "")
 
 	// Hold an open file deep in the tree and read part of it.
 	f, err := os.Open(dir + "/" + deepDir + "/big.dat")
@@ -87,12 +89,14 @@ func TestKernelServerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	srv2 := &nfsv4.Server{FS: newRestartTree(), Logf: t.Logf}
+	srv2 := &nfsv4.Server{FS: newRestartTree(), Logf: t.Logf, Debugf: debugf(t)}
 	go srv2.Serve(ln2)
 
 	// The open file keeps working. (Drop the page cache first so the
 	// reads really go to the new server.)
-	exec.Command("sudo", "-n", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches").Run()
+	if err := dropCaches(); err != nil {
+		t.Logf("dropping caches: %v", err)
+	}
 	rest, err := io.ReadAll(f)
 	if err != nil {
 		t.Fatalf("reading open file after restart: %v", err)

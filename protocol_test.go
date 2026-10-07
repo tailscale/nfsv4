@@ -530,8 +530,23 @@ func TestOpenReadClose(t *testing.T) {
 	}
 	must(t, r, nfsv4.OpPutFH)
 	must(t, r, nfsv4.OpClose)
-	if st, _, _ := read(sid, 0, 1); st != nfsv4.ErrBadStateID {
+	// Reading with a stateid that's no longer valid works (see
+	// checkReadStateID), but not with one for a different file.
+	if st, _, _ := read(sid, 0, 1); st != nfsv4.OK {
 		t.Errorf("READ after CLOSE = %v", st)
+	}
+	b, slot = c.Seq()
+	b.Op(nfsv4.OpPutRootFH)
+	openArgs(b.Op(nfsv4.OpOpen), 1, "big.bin")
+	r, err = c.DoSeq(b, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, r, nfsv4.OpPutRootFH)
+	must(t, r, nfsv4.OpOpen)
+	other, _ := decodeOpen(t, r.D)
+	if st, _, _ := read(other, 0, 1); st != nfsv4.ErrBadStateID {
+		t.Errorf("READ with another file's stateid = %v", st)
 	}
 
 	// Opens that fail.

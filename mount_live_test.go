@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build linux || darwin
+
 package nfsv4_test
 
 import (
@@ -29,6 +31,9 @@ func TestKernelLiveUpdates(t *testing.T) {
 		{"deleg-4.1", true, false, "4.1"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			if isDarwin {
+				tt.vers = "4.1"
+			}
 			m := memfs.New()
 			m.WriteFile("live/f.txt", []byte("value 000\n"), 0o444)
 			if tt.deleg {
@@ -36,7 +41,7 @@ func TestKernelLiveUpdates(t *testing.T) {
 			}
 			srv := &nfsv4.Server{FS: m, Logf: t.Logf, ChangeIsMonotonic: tt.monotonic}
 			m.SetServer(srv)
-			dir := mountServer(t, srv, "vers="+tt.vers+",actimeo=1")
+			dir := mountServer(t, srv, tt.vers, "actimeo=1")
 			for i := range 4 {
 				want := fmt.Sprintf("value %03d\n", i)
 				if i > 0 {
@@ -50,12 +55,22 @@ func TestKernelLiveUpdates(t *testing.T) {
 						time.Sleep(2100 * time.Millisecond)
 					}
 				}
-				got, err := os.ReadFile(dir + "/live/f.txt")
-				if err != nil {
-					t.Fatal(err)
+				start := time.Now()
+				for {
+					got, err := os.ReadFile(dir + "/live/f.txt")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if string(got) == want {
+						break
+					}
+					if !isDarwin || time.Since(start) > 10*time.Second {
+						t.Fatalf("read %d: got %q; want %q", i, got, want)
+					}
+					time.Sleep(100 * time.Millisecond)
 				}
-				if string(got) != want {
-					t.Fatalf("read %d: got %q; want %q", i, got, want)
+				if d := time.Since(start); d > 0 && i > 0 {
+					t.Logf("read %d: change visible after %v", i, d.Round(time.Millisecond))
 				}
 			}
 		})

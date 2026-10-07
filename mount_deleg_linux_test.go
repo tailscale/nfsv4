@@ -22,7 +22,7 @@ func TestKernelDelegations(t *testing.T) {
 	srv := &nfsv4.Server{FS: fs.WithDelegator(), Logf: t.Logf}
 	// actimeo=1 makes the client revalidate undelegated objects after a
 	// second, so we can tell delegations are working.
-	dir := mountServer(t, srv, "vers=4.2,actimeo=1")
+	dir := mountServer(t, srv, "4.2", "actimeo=1")
 
 	// Open and read files, and list directories, to get delegations.
 	for _, p := range []string{"/hello.txt", "/sub/dir/file.go", "/live/data.txt"} {

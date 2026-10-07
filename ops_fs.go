@@ -431,11 +431,24 @@ func boolWord(b bool) uint32 {
 }
 
 // checkReadStateID validates a stateid used for reading the current file.
+//
+// Unknown and outdated stateids are accepted, as if they were the
+// anonymous stateid. On a read-only server, stateids don't affect what a
+// READ may do, and the macOS client (as of macOS 26) retries a READ
+// interrupted by a server restart with its pre-restart stateid even after
+// successfully reclaiming its open state, looping forever if the READ is
+// refused. Stateids for other files and revoked delegations are still
+// rejected, so clients learn about those.
 func (cp *compound) checkReadStateID(sid stateID) Status {
 	cp.m.mu.Lock()
 	defer cp.m.mu.Unlock()
 	st, status := cp.m.lookupStateLocked(cp.cl, sid, cp.curSID)
-	if status != OK {
+	switch status {
+	case OK:
+	case ErrBadStateID, ErrOldStateID:
+		cp.s.debugf("nfsv4: client %#x used stateid %v for %x (%v); allowing the read", cp.cl.id, sid, cp.curFH, status)
+		return OK
+	default:
 		return status
 	}
 	var fh FileHandle
@@ -450,6 +463,7 @@ func (cp *compound) checkReadStateID(sid stateID) Status {
 		fh = st.fh
 	}
 	if !bytes.Equal(fh, cp.curFH) {
+		cp.s.debugf("nfsv4: client %#x used stateid %v for %x, but it's for %x", cp.cl.id, sid, cp.curFH, fh)
 		return ErrBadStateID
 	}
 	return OK

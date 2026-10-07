@@ -265,6 +265,8 @@ func (cp *compound) opCreateSession(d *xdr.Decoder, e *xdr.Encoder) Status {
 	}
 	m.sessions[sess.id] = sess
 	cl.sessions[sess.id] = sess
+	cp.s.debugf("nfsv4: client %#x (%s) created session: flags %#x (granted %#x), %d slots, back chan %+v",
+		cl.id, cl.info.ImplName, flags, rflags, len(sess.slots), back)
 
 	start := e.Len()
 	e.FixedOpaque(sess.id[:])

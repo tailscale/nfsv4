@@ -232,6 +232,7 @@ func (cp *compound) opOpen(d *xdr.Decoder, e *xdr.Encoder) Status {
 	cp.setFHEpoch(fh, attrs, epoch)
 	cp.curAttrsWant = openAttrsWant
 	cp.curSID = &sid
+	cp.s.debugf("nfsv4: client %#x opened %x (claim %d, owner %x): stateid %v", cl.id, fh, claimType, owner, sid)
 
 	encodeStateID(e, sid)
 	e.Bool(cinfoAtomic)
@@ -306,6 +307,7 @@ func (cp *compound) grantDelegLocked(fh FileHandle, isDir bool, policy Delegatio
 		d.timer = timeAfterFunc(policy.MaxAge, func() { m.startRecall(d) })
 	}
 	cp.grants = append(cp.grants, d)
+	cp.s.debugf("nfsv4: granted delegation on %x (dir=%v) to client %#x", fh, isDir, cl.id)
 	return d, 0
 }
 
