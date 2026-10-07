@@ -24,21 +24,31 @@ var mountTest = flag.Bool("mount", os.Getenv("NFSV4_MOUNT_TEST") != "", "run tes
 // point. The mount is removed when the test ends.
 func mountServer(t *testing.T, srv *nfsv4.Server, opts string) string {
 	t.Helper()
-	if !*mountTest {
-		t.Skip("skipping kernel mount test without --mount or $NFSV4_MOUNT_TEST")
-	}
-	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
-		t.Skip("skipping kernel mount test: passwordless sudo unavailable")
-	}
+	skipUnlessMountTest(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
+	return mountPort(t, ln.Addr().(*net.TCPAddr).Port, opts)
+}
 
+func skipUnlessMountTest(t *testing.T) {
+	t.Helper()
+	if !*mountTest {
+		t.Skip("skipping kernel mount test without --mount or $NFSV4_MOUNT_TEST")
+	}
+	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
+		t.Skip("skipping kernel mount test: passwordless sudo unavailable")
+	}
+}
+
+// mountPort mounts the NFS server on the given loopback port and returns
+// the mount point, which is unmounted when the test ends.
+func mountPort(t *testing.T, port int, opts string) string {
+	t.Helper()
 	dir := t.TempDir()
-	port := ln.Addr().(*net.TCPAddr).Port
 	o := fmt.Sprintf("port=%d,proto=tcp,ro,soft,timeo=50,retrans=2", port)
 	if opts != "" {
 		o += "," + opts
@@ -47,14 +57,20 @@ func mountServer(t *testing.T, srv *nfsv4.Server, opts string) string {
 	if err != nil {
 		t.Fatalf("mount: %v\n%s", err, out)
 	}
-	t.Cleanup(func() {
-		out, err := exec.Command("sudo", "-n", "umount", "-f", dir).CombinedOutput()
-		if err != nil {
-			t.Logf("umount: %v, %s; trying lazy unmount", err, out)
-			exec.Command("sudo", "-n", "umount", "-l", "-f", dir).Run()
-		}
-	})
+	t.Cleanup(func() { unmount(t, dir) })
 	return dir
+}
+
+// unmount unmounts dir if it's mounted.
+func unmount(t *testing.T, dir string) {
+	if exec.Command("mountpoint", "-q", dir).Run() != nil {
+		return
+	}
+	out, err := exec.Command("sudo", "-n", "umount", "-f", dir).CombinedOutput()
+	if err != nil {
+		t.Logf("umount: %v, %s; trying lazy unmount", err, out)
+		exec.Command("sudo", "-n", "umount", "-l", "-f", dir).Run()
+	}
 }
 
 func newTestTree() *testfs.FS {
