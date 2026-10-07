@@ -361,3 +361,20 @@ func (c *Client) DoSeq(b *Compound, slot int) (*Result, error) {
 	r.SeqFlags = r.D.Uint32()
 	return r, r.D.Err()
 }
+
+// RemoteAddr returns the server's address.
+func (c *Client) RemoteAddr() string { return c.nc.RemoteAddr().String() }
+
+// AdoptSession makes c use o's client ID and session (with its slot
+// sequence numbers), as a client does when it reconnects.
+func (c *Client) AdoptSession(o *Client) {
+	c.ClientID = o.ClientID
+	c.SessionID = o.SessionID
+	o.slotMu.Lock()
+	c.SlotSeq = append([]uint32(nil), o.SlotSeq...)
+	o.slotMu.Unlock()
+	c.freeSlots = make(chan int, len(c.SlotSeq))
+	for i := range c.SlotSeq {
+		c.freeSlots <- i
+	}
+}

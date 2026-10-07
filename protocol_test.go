@@ -872,3 +872,78 @@ func TestDelegationMaxAge(t *testing.T) {
 		t.Fatal("delegation with MaxAge not recalled")
 	}
 }
+
+func TestClientExpiry(t *testing.T) {
+	srv := &nfsv4.Server{FS: testfs.New(), LeaseTime: time.Second, ClientExpiry: 2 * time.Second}
+	c := newSessionClient(t, srv, false)
+	b, slot := c.Seq()
+	b.Op(nfsv4.OpPutRootFH)
+	if _, err := c.DoSeq(b, slot); err != nil {
+		t.Fatal(err)
+	}
+	// Past the lease time but within ClientExpiry, the client's state
+	// is kept (the server is courteous).
+	time.Sleep(1500 * time.Millisecond)
+	b, slot = c.Seq()
+	b.Op(nfsv4.OpPutRootFH)
+	if _, err := c.DoSeq(b, slot); err != nil {
+		t.Fatalf("after lease expiry: %v", err)
+	}
+	// Past ClientExpiry, it's gone.
+	time.Sleep(3 * time.Second)
+	if st := srv.Stats(); st.Clients != 0 {
+		t.Errorf("clients = %d", st.Clients)
+	}
+	b, slot = c.Seq()
+	b.Op(nfsv4.OpPutRootFH)
+	if _, err := c.DoSeq(b, slot); !errors.Is(err, nfsv4.ErrBadSession) {
+		t.Errorf("after client expiry: %v", err)
+	}
+}
+
+func TestBackchannelRebind(t *testing.T) {
+	srv := &nfsv4.Server{FS: testfs.New()}
+	c1 := newSessionClient(t, srv, true)
+	addr := c1.RemoteAddr()
+
+	// A second connection using the same session has no backchannel
+	// until bound, which SEQUENCE reports once the first connection is
+	// gone.
+	c1.Close()
+	time.Sleep(100 * time.Millisecond)
+	c2 := dialTestServer(t, addr)
+	c2.AdoptSession(c1)
+	b, slot := c2.Seq()
+	r, err := c2.DoSeq(b, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pathDownSession = 0x200
+	if r.SeqFlags&pathDownSession == 0 {
+		t.Errorf("SEQUENCE flags %#x lack CB_PATH_DOWN_SESSION", r.SeqFlags)
+	}
+
+	var bb nfs4client.Compound
+	e := bb.Op(nfsv4.OpBindConnToSession)
+	e.FixedOpaque(c2.SessionID[:])
+	e.Uint32(3) // CDFC4_FORE_OR_BOTH
+	e.Bool(false)
+	r, err = c2.Do(&bb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, r, nfsv4.OpBindConnToSession)
+	r.D.FixedOpaque(16)
+	if dir := r.D.Uint32(); dir != 3 {
+		t.Errorf("BIND_CONN_TO_SESSION dir = %d; want CDFS4_BOTH", dir)
+	}
+
+	b, slot = c2.Seq()
+	r, err = c2.DoSeq(b, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.SeqFlags&pathDownSession != 0 {
+		t.Errorf("SEQUENCE flags %#x after binding", r.SeqFlags)
+	}
+}
