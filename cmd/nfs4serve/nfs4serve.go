@@ -65,7 +65,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, `
 Mount with:
   Linux: sudo mount -t nfs4 -o vers=4.2,port=%d,ro %s:/ /mnt
-  macOS: sudo mount -t nfs -o vers=4.1,port=%d,rdonly %s:/ /mnt
+  macOS: sudo mount -t nfs -o vers=4.1,port=%d,rdonly,rsize=1048576 %s:/ /mnt
 
 `, port, host, port, host)
 

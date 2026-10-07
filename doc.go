@@ -56,9 +56,11 @@
 //     the nfs.delegation_watermark module parameter (5000 by default).
 //     Reopening a file whose delegation was returned costs one OPEN round
 //     trip, which also revalidates it.
-//   - The macOS client doesn't use directory delegations, and file
-//     delegations only extend its attribute cache lifetime to acregmax.
-//     Long-lived caching on macOS mostly comes from mount options.
+//   - The macOS client (as of macOS 26) doesn't use directory
+//     delegations, and file delegations only extend its attribute cache
+//     lifetime to acregmax. Long-lived caching on macOS mostly comes from
+//     mount options. After a recall, it may serve one more read from its
+//     cache before noticing a change.
 //   - Delegations need a callback channel. NFSv4.1 clients run it over
 //     their own TCP connection to the server, so it works through NAT and
 //     userspace networking. Delegations aren't granted to clients without

@@ -21,7 +21,7 @@ import (
 // directly on whatever port it listens on, with no portmapper or mountd:
 //
 //	Linux: mount -t nfs4 -o vers=4.2,port=N,ro HOST:/ /mnt
-//	macOS: mount -t nfs -o vers=4.1,port=N,rdonly HOST:/ /mnt
+//	macOS: mount -t nfs -o vers=4.1,port=N,rdonly,rsize=1048576 HOST:/ /mnt
 //
 // The exported fields must not be changed after the first call to Serve or
 // ServeConn.
