@@ -1,6 +1,7 @@
 # nfsv4
 
 [![status: experimental](https://img.shields.io/badge/status-experimental-blue)](https://tailscale.com/kb/1167/release-stages/#experimental)
+[![Go Reference](https://pkg.go.dev/badge/github.com/tailscale/nfsv4.svg)](https://pkg.go.dev/github.com/tailscale/nfsv4)
 
 `github.com/tailscale/nfsv4` is a Go library for writing read-only NFSv4.1
 servers for virtual filesystems, such as
@@ -40,7 +41,7 @@ go run ./cmd/nfs4serve -dir ~/go/pkg/mod -immutable
 
 ## Using it
 
-With `nodefs`, implement a tree of nodes:
+With [`nodefs`](https://pkg.go.dev/github.com/tailscale/nfsv4/nodefs), implement a tree of nodes:
 
 ```go
 type myDir struct{ /* ... */ }
