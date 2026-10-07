@@ -53,7 +53,10 @@ func TestKernelDelegations(t *testing.T) {
 	if st.Delegations == 0 {
 		t.Fatalf("no delegations granted")
 	}
-	if st.Ops[nfsv4.OpGetDirDelegation] == 0 {
+	dirDelegs := kernelDirDelegations()
+	if !dirDelegs {
+		t.Logf("kernel client doesn't support directory delegations; only checking file delegations")
+	} else if st.Ops[nfsv4.OpGetDirDelegation] == 0 {
 		t.Errorf("client never asked for a directory delegation")
 	}
 
@@ -76,7 +79,14 @@ func TestKernelDelegations(t *testing.T) {
 		time.Sleep(1100 * time.Millisecond)
 	}
 	after := srv.Stats()
-	for _, op := range []nfsv4.Op{nfsv4.OpGetAttr, nfsv4.OpLookup, nfsv4.OpAccess, nfsv4.OpReadDir, nfsv4.OpOpen, nfsv4.OpRead} {
+	quietOps := []nfsv4.Op{nfsv4.OpGetAttr, nfsv4.OpLookup, nfsv4.OpAccess, nfsv4.OpReadDir, nfsv4.OpOpen, nfsv4.OpRead}
+	if !dirDelegs {
+		// Without directory delegations, the client still
+		// revalidates directories and the names in them, but
+		// delegated files are opened and read locally.
+		quietOps = []nfsv4.Op{nfsv4.OpOpen, nfsv4.OpRead}
+	}
+	for _, op := range quietOps {
 		if d := after.Ops[op] - before.Ops[op]; d != 0 {
 			t.Errorf("%v ops while delegated: %d", op, d)
 		}
@@ -135,4 +145,12 @@ func diffOps(a, b nfsv4.Stats) map[nfsv4.Op]uint64 {
 		}
 	}
 	return m
+}
+
+// kernelDirDelegations reports whether the kernel NFS client supports and
+// uses directory delegations (the nfsv4 module's
+// directory_delegations parameter). The nfsv4 module must be loaded.
+func kernelDirDelegations() bool {
+	b, err := os.ReadFile("/sys/module/nfsv4/parameters/directory_delegations")
+	return err == nil && strings.TrimSpace(string(b)) == "Y"
 }
