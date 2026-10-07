@@ -75,7 +75,11 @@
 // recognizes should get ErrStale, from which the Linux and macOS clients
 // recover by looking names up again from the parent directory, but that
 // doesn't work for open files or processes whose working directory is in
-// the mount, and never for the root filehandle.
+// the mount, and never for the root filehandle. The Linux client recovers
+// transparently for path-based system calls; the macOS client (as of
+// macOS 26) returns ESTALE to the application once before looking names
+// up again. FileIDs must be as stable as filehandles: clients consider an
+// object whose FileID changed to be gone.
 //
 // # Not supported
 //
