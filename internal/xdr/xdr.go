@@ -246,3 +246,7 @@ func (d *Decoder) ArrayLen(max, minElemSize int) int {
 	}
 	return int(n)
 }
+
+// Pad returns the number of padding bytes XDR requires after n bytes of
+// opaque data.
+func Pad(n int) int { return pad(n) }

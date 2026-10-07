@@ -111,18 +111,10 @@ const (
 	FHVolRename        uint32 = 0x08
 )
 
-// ChangeAttrType is the value of the change_attr_type attribute
-// (change_attr_type4), which tells NFSv4.2 clients how the change attribute
-// evolves.
-type ChangeAttrType uint32
-
-// Change attribute types.
+// Values of the change_attr_type attribute (change_attr_type4).
 const (
-	ChangeMonotonicIncr        ChangeAttrType = 0
-	ChangeVersionCounter       ChangeAttrType = 1
-	ChangeVersionCounterNoPNFS ChangeAttrType = 2
-	ChangeTimeMetadata         ChangeAttrType = 3
-	ChangeUndefined            ChangeAttrType = 4
+	changeMonotonicIncr = 0
+	changeUndefined     = 4
 )
 
 // Protocol limits.
