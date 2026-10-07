@@ -195,7 +195,7 @@ type stateManager struct {
 	recalling  map[string]int // filehandle → number of in-progress recalls
 	nextID     uint64
 
-	invalEpoch uint64 // number of Invalidate calls
+	invalEpoch uint64 // number of Recall starts and releases
 	invalRing  [recentInvalidations]invalRecord
 }
 

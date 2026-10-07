@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/tailscale/nfsv4/internal/xdr"
@@ -19,48 +20,75 @@ const (
 	// cbCallTimeout bounds one callback round trip.
 	cbCallTimeout = 15 * time.Second
 
-	// recentInvalidations is how many recent Invalidate calls are
-	// remembered, to avoid granting delegations based on attributes
-	// fetched before an invalidation.
+	// recentInvalidations is how many recent Recall starts and releases
+	// are remembered, to avoid granting delegations based on attributes
+	// fetched before an object changed.
 	recentInvalidations = 1024
 )
 
 // timeAfterFunc is time.AfterFunc, replaceable in tests.
 var timeAfterFunc = time.AfterFunc
 
-// Invalidate recalls all delegations granted for fh, which must be called
-// after an object for which delegations were granted changes, so that
-// clients stop trusting their cached copies.
+// Recall recalls the delegations clients hold for the objects fhs and
+// prevents new delegations for them from being granted until release is
+// called. An FS that grants delegations for objects that can change must
+// change them only between Recall and release:
 //
-// Invalidate returns once all delegations for fh have been returned by
-// their clients, or revoked from clients that didn't return them within
-// the lease time, or when ctx is done. Clients that held delegations then
-// revalidate their caches using the change attribute, so the FS must
-// report a new Attrs.Change for the changed object (for directories, also
-// when entries are added or removed).
+//	release, err := srv.Recall(ctx, fileFH, dirFH)
+//	if err != nil {
+//		return err
+//	}
+//	defer release()
+//	// ... change the file, and the directory's entries ...
 //
-// While Invalidate runs, no new delegations are granted for fh, and
-// requests that fetched fh's attributes before Invalidate was called don't
-// get delegations either.
-func (s *Server) Invalidate(ctx context.Context, fh FileHandle) error {
+// The order matters. Clients send their final GETATTR for a delegated
+// object when returning the delegation and, still trusting their
+// delegation at that moment, record the new change attribute without
+// discarding their cached data. So clients must return their delegations
+// before the object changes; after release, they notice the new change
+// attribute (which the FS must report) and discard their stale caches.
+//
+// Recall returns once all delegations for fhs have been returned by their
+// clients, or revoked from clients that didn't return them within the
+// lease time. If ctx is done first, Recall returns ctx's error, and
+// delegations aren't blocked; the caller should retry before changing
+// anything.
+//
+// Objects with no delegations outstanding (including all objects of an FS
+// that doesn't implement Delegator) are handled quickly, without
+// contacting any clients.
+func (s *Server) Recall(ctx context.Context, fhs ...FileHandle) (release func(), err error) {
 	s.init()
 	m := s.state
-	key := string(fh)
-	m.mu.Lock()
-	m.noteInvalidationLocked(key)
-	m.recalling[key]++
+	keys := make([]string, len(fhs))
 	var ds []*delegState
-	for d := range m.delegsByFH[key] {
-		ds = append(ds, d)
+	m.mu.Lock()
+	for i, fh := range fhs {
+		key := string(fh)
+		keys[i] = key
+		m.noteInvalidationLocked(key)
+		m.recalling[key]++
+		for d := range m.delegsByFH[key] {
+			ds = append(ds, d)
+		}
 	}
 	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		if m.recalling[key]--; m.recalling[key] <= 0 {
-			delete(m.recalling, key)
-		}
-		m.mu.Unlock()
-	}()
+
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			for _, key := range keys {
+				// Requests that fetched attributes before now
+				// must not be granted delegations.
+				m.noteInvalidationLocked(key)
+				if m.recalling[key]--; m.recalling[key] <= 0 {
+					delete(m.recalling, key)
+				}
+			}
+		})
+	}
 
 	for _, d := range ds {
 		m.startRecall(d)
@@ -69,12 +97,14 @@ func (s *Server) Invalidate(ctx context.Context, fh FileHandle) error {
 		select {
 		case <-d.done:
 		case <-ctx.Done():
-			return ctx.Err()
+			release()
+			return nil, ctx.Err()
 		case <-s.ctx.Done():
-			return ErrServerClosed
+			release()
+			return nil, ErrServerClosed
 		}
 	}
-	return nil
+	return release, nil
 }
 
 func (m *stateManager) invalEpochNow() uint64 {

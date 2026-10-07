@@ -311,8 +311,8 @@ type Delegation struct {
 
 	// MaxAge, if non-zero, limits how long a delegation may be held. The
 	// server recalls it after this long. Zero means the delegation is
-	// held until the object is invalidated with Server.Invalidate (for
-	// immutable objects: forever) or the client returns it voluntarily.
+	// held until it's recalled with Server.Recall (for immutable
+	// objects: forever) or the client returns it voluntarily.
 	MaxAge time.Duration
 }
 
@@ -323,9 +323,9 @@ type Delegation struct {
 // NFSv4.1 clients normally establish over their own connection. The server
 // only consults the Delegator when one exists.
 //
-// An FS that grants delegations for an object that can change must call
-// Server.Invalidate after the object changes. For immutable objects there's
-// nothing to do.
+// An FS that grants delegations for an object that can change must change it
+// only while its delegations are recalled; see Server.Recall. For immutable
+// objects there's nothing to do.
 type Delegator interface {
 	// Delegate decides whether to grant a read delegation for fh, a
 	// regular file being opened or a directory for which the client asked

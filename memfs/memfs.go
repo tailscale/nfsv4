@@ -6,8 +6,8 @@
 //
 // Files can be marked immutable, in which case clients are granted
 // delegations to cache them forever. Changes to mutable files and
-// directories recall delegations (when SetServer has been called), so
-// clients see changes immediately.
+// directories first recall delegations (when SetServer has been called),
+// so clients see changes immediately.
 package memfs
 
 import (
@@ -96,11 +96,10 @@ func split(p string) []string {
 }
 
 // mkdirAllLocked returns the directory at comps, creating it and its
-// parents as needed. It returns the paths of directories whose entries
-// changed.
-func (m *FS) mkdirAllLocked(comps []string, changed *[]string) *node {
+// parents as needed.
+func (m *FS) mkdirAllLocked(comps []string) *node {
 	n := m.root
-	for i, c := range comps {
+	for _, c := range comps {
 		child, ok := n.children[c]
 		if !ok {
 			child = m.newNode(nfsv4.TypeDir, 0o755)
@@ -108,7 +107,6 @@ func (m *FS) mkdirAllLocked(comps []string, changed *[]string) *node {
 			child.cache = n.cache
 			n.children[c] = child
 			n.touchLocked()
-			*changed = append(*changed, strings.Join(comps[:i], "/"))
 		}
 		n = child
 	}
@@ -124,11 +122,8 @@ func (n *node) touchLocked() {
 
 // MkdirAll creates the directory p and any missing parents.
 func (m *FS) MkdirAll(p string) error {
-	var changed []string
-	m.mu.Lock()
-	m.mkdirAllLocked(split(p), &changed)
-	m.mu.Unlock()
-	return m.invalidate(changed)
+	comps := split(p)
+	return m.change(comps, false, func() { m.mkdirAllLocked(comps) })
 }
 
 // WriteFile creates or replaces the contents of the regular file p,
@@ -153,33 +148,28 @@ func (m *FS) add(p string, t nfsv4.FileType, mode uint32, set func(*node)) error
 	if len(comps) == 0 {
 		panic("memfs: can't replace the root")
 	}
-	var changed []string
-	m.mu.Lock()
-	dir := m.mkdirAllLocked(comps[:len(comps)-1], &changed)
-	name := comps[len(comps)-1]
-	n, ok := dir.children[name]
-	if ok && (n.immutable || n.attrs.Type != t) {
-		m.mu.Unlock()
-		if n.immutable {
+	return m.change(comps, false, func() {
+		dir := m.mkdirAllLocked(comps[:len(comps)-1])
+		name := comps[len(comps)-1]
+		n, ok := dir.children[name]
+		if ok && n.immutable {
 			panic("memfs: modifying immutable " + p)
 		}
-		panic("memfs: changing type of " + p)
-	}
-	if !ok {
-		n = m.newNode(t, mode)
-		n.immutable = dir.immutable
-		n.cache = dir.cache
-		dir.children[name] = n
-		dir.touchLocked()
-		changed = append(changed, strings.Join(comps[:len(comps)-1], "/"))
-	} else {
-		n.touchLocked()
-		n.attrs.Mode = mode
-		changed = append(changed, strings.Join(comps, "/"))
-	}
-	set(n)
-	m.mu.Unlock()
-	return m.invalidate(changed)
+		if ok && n.attrs.Type != t {
+			panic("memfs: changing type of " + p)
+		}
+		if !ok {
+			n = m.newNode(t, mode)
+			n.immutable = dir.immutable
+			n.cache = dir.cache
+			dir.children[name] = n
+			dir.touchLocked()
+		} else {
+			n.touchLocked()
+			n.attrs.Mode = mode
+		}
+		set(n)
+	})
 }
 
 // Remove removes p and anything below it.
@@ -188,25 +178,79 @@ func (m *FS) Remove(p string) error {
 	if len(comps) == 0 {
 		panic("memfs: can't remove the root")
 	}
-	m.mu.Lock()
-	n := m.root
-	for _, c := range comps[:len(comps)-1] {
-		n = n.children[c]
-		if n == nil {
-			m.mu.Unlock()
-			return nil
+	err := m.change(comps, true, func() {
+		n := m.root
+		for _, c := range comps[:len(comps)-1] {
+			n = n.children[c]
+			if n == nil {
+				return
+			}
 		}
-	}
-	name := comps[len(comps)-1]
-	if _, ok := n.children[name]; !ok {
+		name := comps[len(comps)-1]
+		if _, ok := n.children[name]; ok {
+			delete(n.children, name)
+			n.touchLocked()
+		}
+	})
+	m.Forget(p)
+	return err
+}
+
+// change runs fn with m.mu held, while delegations are recalled for the
+// objects that changing the path comps (and creating its missing parent
+// directories) affects.
+func (m *FS) change(comps []string, remove bool, fn func()) error {
+	for {
+		m.mu.Lock()
+		srv := m.srv
+		paths := m.affectedLocked(comps, remove)
 		m.mu.Unlock()
+
+		release := func() {}
+		if srv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			var err error
+			release, err = m.Recall(ctx, srv, paths...)
+			cancel()
+			if err != nil {
+				return err
+			}
+		}
+		m.mu.Lock()
+		if !slices.Equal(paths, m.affectedLocked(comps, remove)) {
+			// Something else changed the tree meanwhile.
+			m.mu.Unlock()
+			release()
+			continue
+		}
+		fn()
+		m.mu.Unlock()
+		release()
+		for _, p := range paths {
+			m.Forget(p)
+		}
 		return nil
 	}
-	delete(n.children, name)
-	n.touchLocked()
-	m.mu.Unlock()
-	m.Forget(p)
-	return m.invalidate([]string{strings.Join(comps[:len(comps)-1], "/"), strings.Join(comps, "/")})
+}
+
+// affectedLocked returns the paths whose objects change when creating or
+// modifying the path comps: the object itself if it exists, and otherwise
+// the deepest existing directory (which gains an entry). When removing, the
+// parent directory is affected too.
+func (m *FS) affectedLocked(comps []string, remove bool) []string {
+	n := m.root
+	for i, c := range comps {
+		child, ok := n.children[c]
+		if !ok {
+			return []string{strings.Join(comps[:i], "/")}
+		}
+		n = child
+	}
+	p := strings.Join(comps, "/")
+	if remove && len(comps) > 0 {
+		return []string{p, strings.Join(comps[:len(comps)-1], "/")}
+	}
+	return []string{p}
 }
 
 // SetImmutable marks p and everything below it (including things created
@@ -245,26 +289,6 @@ func (m *FS) setCache(p string, d nfsv4.Delegation, immutable bool) {
 		}
 	}
 	walk(n)
-}
-
-// invalidate recalls delegations for the given paths.
-func (m *FS) invalidate(paths []string) error {
-	m.mu.Lock()
-	srv := m.srv
-	m.mu.Unlock()
-	for _, p := range paths {
-		m.Forget(p)
-		if srv == nil {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		err := srv.Invalidate(ctx, m.Handle(p))
-		cancel()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // The nodefs node types. A *node is wrapped in the type matching its

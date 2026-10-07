@@ -83,25 +83,29 @@ func TestKernelDelegations(t *testing.T) {
 	}
 	t.Logf("ops while delegated: %v", diffOps(before, after))
 
-	// Change a live file and invalidate it. The client must see the new
-	// contents.
-	fs.WriteFile("/live/data.txt", []byte("version 2, longer\n"), 0o644)
+	// Recall a live file's delegations and change it. The client must
+	// see the new contents.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Invalidate(ctx, fs.Handle("/live/data.txt")); err != nil {
-		t.Fatalf("Invalidate: %v", err)
+	release, err := srv.Recall(ctx, fs.Handle("/live/data.txt"))
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
 	}
+	fs.WriteFile("/live/data.txt", []byte("version 2\n"), 0o644)
+	release()
 	got, err := os.ReadFile(dir + "/live/data.txt")
-	if err != nil || string(got) != "version 2, longer\n" {
-		t.Errorf("after invalidate: %q, %v", got, err)
+	if err != nil || string(got) != "version 2\n" {
+		t.Errorf("after recall: %q, %v", got, err)
 	}
 
-	// Add a file to a delegated directory and invalidate the directory.
-	// The client must see the new entry.
-	fs.WriteFile("/sub/dir/new.go", []byte("package new\n"), 0o444)
-	if err := srv.Invalidate(ctx, fs.Handle("/sub/dir")); err != nil {
-		t.Fatalf("Invalidate: %v", err)
+	// Add a file to a delegated directory. The client must see the new
+	// entry.
+	release, err = srv.Recall(ctx, fs.Handle("/sub/dir"))
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
 	}
+	fs.WriteFile("/sub/dir/new.go", []byte("package new\n"), 0o444)
+	release()
 	ents, err := os.ReadDir(dir + "/sub/dir")
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +115,7 @@ func TestKernelDelegations(t *testing.T) {
 		names = append(names, e.Name())
 	}
 	if strings.Join(names, ",") != "file.go,new.go" {
-		t.Errorf("after invalidate, ReadDir = %q", names)
+		t.Errorf("after recall, ReadDir = %q", names)
 	}
 	if _, err := os.Stat(dir + "/sub/dir/new.go"); err != nil {
 		t.Errorf("stat new file: %v", err)

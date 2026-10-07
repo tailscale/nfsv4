@@ -714,19 +714,23 @@ func TestDelegationRecall(t *testing.T) {
 	rc.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Invalidate(ctx, fh); err != nil {
-		t.Fatalf("Invalidate: %v", err)
+	release, err := srv.Recall(ctx, fh)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
 	}
+	release()
 	if err := <-returned; err != nil {
 		t.Fatal(err)
 	}
 	if st := srv.Stats(); st.Delegations != 0 || st.Revocations != 0 || st.Recalls != 1 {
 		t.Errorf("stats: %+v", st)
 	}
-	// Invalidate with nothing delegated returns immediately.
-	if err := srv.Invalidate(ctx, fh); err != nil {
+	// Recall with nothing delegated returns immediately.
+	release, err = srv.Recall(ctx, fh)
+	if err != nil {
 		t.Fatal(err)
 	}
+	release()
 }
 
 func TestDelegationRevoked(t *testing.T) {
@@ -740,11 +744,13 @@ func TestDelegationRevoked(t *testing.T) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Invalidate(ctx, fh); err != nil {
-		t.Fatalf("Invalidate: %v", err)
+	release, err := srv.Recall(ctx, fh)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
 	}
+	release()
 	if d := time.Since(start); d < time.Second {
-		t.Errorf("Invalidate returned after only %v", d)
+		t.Errorf("Recall returned after only %v", d)
 	}
 	if st := srv.Stats(); st.Revocations != 1 || st.Delegations != 0 {
 		t.Errorf("stats: %+v", st)

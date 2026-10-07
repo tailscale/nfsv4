@@ -22,8 +22,8 @@
 //
 // Resolved nodes are cached by path in an LRU cache, so nodes should be
 // cheap to keep in memory, and an FS whose nodes change identity (a path
-// that now refers to a different object) should call FS.Forget or
-// FS.Invalidate.
+// that now refers to a different object) should call FS.Forget, or use
+// FS.Recall when changing objects that clients may have delegations for.
 package nodefs
 
 import (
@@ -163,7 +163,7 @@ var (
 
 // Handle returns the filehandle for the node at path p (slash-separated,
 // relative to the root; "" or "/" is the root), as sent to clients.
-// It's what to pass to nfsv4.Server.Invalidate.
+// It's what to pass to nfsv4.Server.Recall.
 func (fs *FS) Handle(p string) nfsv4.FileHandle {
 	return fs.handleFor(cleanPath(p))
 }
@@ -298,13 +298,28 @@ func (fs *FS) Forget(p string) {
 	}
 }
 
-// Invalidate forgets the cached node at path p (see Forget) and recalls
-// client delegations for it with srv.Invalidate. Call it after the object
-// at p changes (for directories: after entries are added or removed), if
-// its cache policy grants delegations.
-func (fs *FS) Invalidate(ctx context.Context, srv *nfsv4.Server, p string) error {
-	fs.Forget(p)
-	return srv.Invalidate(ctx, fs.Handle(p))
+// Recall recalls client delegations for the objects at paths with
+// srv.Recall, before they're changed. The returned release function
+// forgets the cached nodes for paths (see Forget) and allows delegations
+// again; call it after making the changes. See nfsv4.Server.Recall.
+//
+// When adding or removing directory entries, include the directory's
+// path.
+func (fs *FS) Recall(ctx context.Context, srv *nfsv4.Server, paths ...string) (release func(), err error) {
+	fhs := make([]nfsv4.FileHandle, len(paths))
+	for i, p := range paths {
+		fhs[i] = fs.Handle(p)
+	}
+	srvRelease, err := srv.Recall(ctx, fhs...)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		for _, p := range paths {
+			fs.Forget(p)
+		}
+		srvRelease()
+	}, nil
 }
 
 // resolve returns the path and node for filehandle h.
