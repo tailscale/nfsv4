@@ -150,6 +150,9 @@ func (m *stateManager) startRecall(d *delegState) {
 	}
 	d.recalling = true
 	m.mu.Unlock()
+	if m.s.ctx.Err() != nil {
+		return // server closed
+	}
 	m.s.stats.recalls.Add(1)
 	m.s.wg.Add(1)
 	go func() {

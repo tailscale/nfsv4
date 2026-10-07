@@ -408,7 +408,8 @@ func (cp *compound) opSequence(d *xdr.Decoder, e *xdr.Encoder) Status {
 	cp.seqID = seq
 	cp.cacheThis = cacheThis
 	cp.maxResp = int(sess.fore.maxResponseSize)
-	cp.req.Client = &cl.info
+	info := cl.info // a copy, as EXCHANGE_ID may update it concurrently
+	cp.req.Client = &info
 
 	var flags uint32
 	if sess.backGranted && len(sess.backConns) == 0 {
