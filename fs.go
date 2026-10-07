@@ -110,8 +110,9 @@ type ReadDirArgs struct {
 	Verifier uint64
 
 	// Want is the set of attributes the client wants for each entry, as
-	// in FS.GetAttr. If it is empty, the client wants only names and
-	// cookies.
+	// in FS.GetAttr. If it includes AttrFileHandle, the client wants
+	// each entry's filehandle. If it is empty, the client wants only
+	// names and cookies.
 	Want AttrMask
 }
 

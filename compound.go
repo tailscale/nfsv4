@@ -46,9 +46,11 @@ type compound struct {
 	savedSID       *stateID
 
 	// curAttrs caches the attributes of curFH, if known. curAttrsWant is
-	// the want mask they were fetched with.
-	curAttrs     *Attrs
-	curAttrsWant AttrMask
+	// the want mask they were fetched with, and curAttrsEpoch the
+	// stateManager's invalidation epoch from before they were fetched.
+	curAttrs      *Attrs
+	curAttrsWant  AttrMask
+	curAttrsEpoch uint64
 
 	// grants are delegations granted by this compound. Their replySent
 	// flag is set once the reply is sent.
@@ -216,7 +218,10 @@ func (cp *compound) run(args []byte, e *xdr.Encoder) {
 		if status == OK && e.Len()-start > cp.maxResp {
 			status = ErrRepTooBig
 		}
-		if op == OpIllegal || opHandlers[op] == nil {
+		if status == OK && cp.cacheThis && cp.sess != nil && e.Len()-start > int(cp.sess.fore.maxResponseCached) {
+			status = ErrRepTooBigToCache
+		}
+		if op == OpIllegal || opHandlers[op] == nil || (cp.minor < 2 && isOp42(op)) {
 			// The result of an unknown operation is reported as
 			// OP_ILLEGAL.
 			e.PutUint32At(resStart, uint32(OpIllegal))
@@ -235,11 +240,11 @@ func (cp *compound) run(args []byte, e *xdr.Encoder) {
 
 	if cp.slot != nil && cp.cacheThis {
 		reply := e.Bytes()[start:]
-		if len(reply) <= int(cp.sess.fore.maxResponseCached) {
-			cp.m.mu.Lock()
+		cp.m.mu.Lock()
+		if cp.slot.seqid == cp.seqID && len(reply) <= int(cp.sess.fore.maxResponseCached) {
 			cp.slot.reply = append([]byte(nil), reply...)
-			cp.m.mu.Unlock()
 		}
+		cp.m.mu.Unlock()
 	}
 }
 
@@ -278,7 +283,9 @@ func (cp *compound) finishSlot() {
 		return
 	}
 	cp.m.mu.Lock()
-	cp.slot.inUse = false
+	if cp.slot.seqid == cp.seqID {
+		cp.slot.inUse = false
+	}
 	cp.m.mu.Unlock()
 }
 
@@ -319,8 +326,15 @@ func (cp *compound) needFH() Status {
 }
 
 // setFH sets the current filehandle. attrs, if non-nil, are its known
-// attributes.
+// attributes, fetched after invalidation epoch attrsEpoch (see setFHEpoch).
 func (cp *compound) setFH(fh FileHandle, attrs *Attrs) {
+	cp.setFHEpoch(fh, attrs, 0)
+}
+
+// setFHEpoch is like setFH, with the invalidation epoch from before attrs
+// were fetched.
+func (cp *compound) setFHEpoch(fh FileHandle, attrs *Attrs, attrsEpoch uint64) {
+	cp.curAttrsEpoch = attrsEpoch
 	cp.curFH = fh
 	cp.curSID = nil
 	cp.curAttrs = attrs
@@ -366,6 +380,7 @@ func (cp *compound) getAttrs(want AttrMask) (*Attrs, Status) {
 	if cp.curAttrs != nil && cp.curAttrsWant.ContainsAll(want) {
 		return cp.curAttrs, OK
 	}
+	epoch := cp.m.invalEpochNow()
 	a, err := cp.s.FS.GetAttr(&cp.req, cp.curFH, want)
 	if err != nil {
 		return nil, cp.fsErr("GetAttr", err)
@@ -376,6 +391,7 @@ func (cp *compound) getAttrs(want AttrMask) (*Attrs, Status) {
 	}
 	cp.curAttrs = a
 	cp.curAttrsWant = want
+	cp.curAttrsEpoch = epoch
 	return a, OK
 }
 

@@ -27,6 +27,7 @@
 package nodefs
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"crypto/rand"
@@ -376,12 +377,20 @@ func (fs *FS) resolve(r *nfsv4.Request, h nfsv4.FileHandle) (string, Node, error
 	}
 	if !hashed {
 		p := joinPath(names)
+		if !bytes.Equal(encodePath(p, names), h) {
+			// Not the canonical encoding of p (for instance, a
+			// short path with a full-path hash appended).
+			return "", nil, nfsv4.ErrBadHandle
+		}
 		n, err := fs.walk(r, p)
 		return p, n, err
 	}
 	p, n, err := fs.findHashed(r, joinPath(names), comps[len(names):], fullHash)
 	if err != nil {
 		return "", nil, err
+	}
+	if !bytes.Equal(encodePath(p, splitPath(p)), h) {
+		return "", nil, nfsv4.ErrBadHandle
 	}
 	fs.mu.Lock()
 	fs.addAliasLocked(string(h), p)
@@ -408,6 +417,9 @@ func (fs *FS) walk(r *nfsv4.Request, p string) (Node, error) {
 	}
 	parent, name := path.Split(p)
 	parent = trimSlash(parent)
+	if !validName(name) {
+		return nil, nfsv4.ErrBadHandle
+	}
 	pn, err := fs.walk(r, parent)
 	if err != nil {
 		return nil, err
@@ -460,7 +472,7 @@ func (fs *FS) findHashed(r *nfsv4.Request, prefix string, rest []pathComp, fullH
 		return "", nil, nfsv4.ErrStale
 	}
 	for _, ent := range ents {
-		if compHash(ent.Name) != rest[0].hash {
+		if compHash(ent.Name) != rest[0].hash || !validName(ent.Name) {
 			continue
 		}
 		cp := ent.Name
@@ -582,10 +594,11 @@ func (fs *FS) ReadDir(r *nfsv4.Request, dir nfsv4.FileHandle, args nfsv4.ReadDir
 	}
 	start := 0
 	if args.Cookie != 0 {
-		start = int(args.Cookie - 2) // cookie for entry i is i+3
-		if args.Cookie < 3 || start > len(ents) {
+		// The cookie for entry i is i+3, so resume at Cookie-2.
+		if args.Cookie < 3 || args.Cookie-2 > uint64(len(ents)) {
 			return nfsv4.ReadDirResult{}, nfsv4.ErrBadCookie
 		}
+		start = int(args.Cookie - 2)
 	}
 	wantAttrs := !args.Want.IsEmpty()
 	for i := start; i < len(ents); i++ {

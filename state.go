@@ -306,7 +306,7 @@ func (m *stateManager) destroySessionLocked(sess *session) {
 
 // bindBackLocked binds c as a backchannel connection for sess.
 func (m *stateManager) bindBackLocked(sess *session, c *conn) {
-	if c.backFor[sess] {
+	if c.gone || c.backFor[sess] {
 		return
 	}
 	if c.backFor == nil {
@@ -328,6 +328,7 @@ func (m *stateManager) connClosed(c *conn) {
 		}
 	}
 	c.backFor = nil
+	c.gone = true
 }
 
 // backConn returns a live backchannel connection for sess, or nil.

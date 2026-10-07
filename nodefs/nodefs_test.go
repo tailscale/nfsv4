@@ -269,3 +269,23 @@ func TestLookupParentAndReadDir(t *testing.T) {
 		t.Errorf("Lookup missing: %v", err)
 	}
 }
+
+func TestCraftedHandles(t *testing.T) {
+	tr := newTree("a/b.txt", "c.txt")
+	fs := New(dirT{tr.root}, nil)
+	for _, h := range []nfsv4.FileHandle{
+		{fmtPath, 2, '.', '.', 5, 'c', '.', 't', 'x', 't'},
+		{fmtPath, 1, '.', 5, 'c', '.', 't', 'x', 't'},
+		{fmtPath, 7, 'a', '/', 'b', '.', 't', 'x', 't'},
+		{fmtPath, 3, 'a', 0, 'b'},
+		// A short path in the hashed format isn't canonical.
+		append(nfsv4.FileHandle{fmtPath, 1, 'a', 0}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+	} {
+		if _, err := fs.GetAttr(req, h, nfsv4.AttrMask{}); err == nil {
+			t.Errorf("GetAttr(%q) succeeded", h)
+		}
+	}
+	if _, err := fs.ReadDir(req, rootHandle, nfsv4.ReadDirArgs{Cookie: 1 << 63}, func(nfsv4.DirEntry) bool { return true }); !errors.Is(err, nfsv4.ErrBadCookie) {
+		t.Errorf("huge cookie: %v", err)
+	}
+}

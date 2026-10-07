@@ -18,6 +18,11 @@ const (
 	// for replays.
 	maxCachedReply = 64 << 10
 
+	// maxSessionsPerClient and maxClients bound the state clients can
+	// make the server keep.
+	maxSessionsPerClient = 16
+	maxClients           = 10000
+
 	authGSS = 6 // RPCSEC_GSS
 )
 
@@ -98,6 +103,10 @@ func (cp *compound) opExchangeID(d *xdr.Decoder, e *xdr.Encoder) Status {
 				or = &ownerRecords{}
 				m.byOwner[key] = or
 			}
+		}
+		if len(m.clients) >= maxClients {
+			m.s.logf("nfsv4: too many clients (%d); refusing EXCHANGE_ID", len(m.clients))
+			return ErrDelay
 		}
 		cl = newClient(m.newClientID())
 		cl.ownerKey = key
@@ -192,6 +201,9 @@ func (cp *compound) opCreateSession(d *xdr.Decoder, e *xdr.Encoder) Status {
 	}
 	if fore.maxOperations < 2 || fore.maxRequests < 1 {
 		return ErrInval
+	}
+	if len(cl.sessions) >= maxSessionsPerClient {
+		return ErrNoSpc
 	}
 
 	if !cl.confirmed {
@@ -357,7 +369,7 @@ func (cp *compound) opSequence(d *xdr.Decoder, e *xdr.Encoder) Status {
 	copy(sid[:], d.FixedOpaque(sessionIDSize))
 	seq := d.Uint32()
 	slotID := d.Uint32()
-	highest := d.Uint32()
+	d.Uint32() // sa_highest_slotid
 	cacheThis := d.Bool()
 	if st := decodeErr(d); st != OK {
 		return st
@@ -383,6 +395,13 @@ func (cp *compound) opSequence(d *xdr.Decoder, e *xdr.Encoder) Status {
 	switch {
 	case seq == sl.seqid+1:
 		// A new request.
+		if sl.inUse {
+			// The client hasn't seen the reply to the previous
+			// request on this slot yet; it shouldn't reuse it.
+			return ErrDelay
+		}
+	case seq == sl.seqid && sl.seqid == 0:
+		return ErrSeqMisordered // never used
 	case seq == sl.seqid:
 		if sl.inUse {
 			return ErrDelay
@@ -422,7 +441,11 @@ func (cp *compound) opSequence(d *xdr.Decoder, e *xdr.Encoder) Status {
 	e.FixedOpaque(sid[:])
 	e.Uint32(seq)
 	e.Uint32(slotID)
-	e.Uint32(max(highest, slotID))
+	// Both the highest slot ID we'll accept and our target are the
+	// whole table. (sr_highest_slotid is not an echo of
+	// sa_highest_slotid; the Linux client shrinks its slot table to
+	// it.)
+	e.Uint32(uint32(len(sess.slots) - 1))
 	e.Uint32(uint32(len(sess.slots) - 1))
 	e.Uint32(flags)
 	return OK

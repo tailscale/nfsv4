@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tailscale/nfsv4"
 	"github.com/tailscale/nfsv4/nodefs"
@@ -87,6 +88,9 @@ func (n osNode) child(name string, fi fs.FileInfo) nodefs.Node {
 }
 
 func (d osDir) Lookup(r *nfsv4.Request, name string) (nodefs.Node, error) {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
+		return nil, nfsv4.ErrNoEnt // never escape the served directory
+	}
 	fi, err := os.Lstat(filepath.Join(d.path, name))
 	if err != nil {
 		return nil, err

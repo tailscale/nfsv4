@@ -86,13 +86,20 @@ func ReadRecord(r io.Reader, buf []byte, max int) ([]byte, error) {
 		if len(buf)+n > max {
 			return nil, ErrRecordTooLarge
 		}
-		start := len(buf)
-		buf = append(buf, make([]byte, n)...)
-		if _, err := io.ReadFull(r, buf[start:]); err != nil {
-			if err == io.EOF {
-				err = io.ErrUnexpectedEOF
+		// Grow the buffer as data arrives, rather than trusting the
+		// length in the header, so peers can't make us allocate
+		// memory they don't fill.
+		for n > 0 {
+			chunk := min(n, 64<<10)
+			start := len(buf)
+			buf = append(buf, make([]byte, chunk)...)
+			if _, err := io.ReadFull(r, buf[start:]); err != nil {
+				if err == io.EOF {
+					err = io.ErrUnexpectedEOF
+				}
+				return nil, err
 			}
-			return nil, err
+			n -= chunk
 		}
 		if h&lastFragment != 0 {
 			return buf, nil

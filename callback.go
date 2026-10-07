@@ -150,11 +150,10 @@ func (m *stateManager) startRecall(d *delegState) {
 	}
 	d.recalling = true
 	m.mu.Unlock()
-	if m.s.ctx.Err() != nil {
+	if !m.s.addWork() {
 		return // server closed
 	}
 	m.s.stats.recalls.Add(1)
-	m.s.wg.Add(1)
 	go func() {
 		defer m.s.wg.Done()
 		m.recall(d)
@@ -176,7 +175,11 @@ func isClosed(ch chan struct{}) bool {
 func (m *stateManager) recall(d *delegState) {
 	s := m.s
 	ctx := s.ctx
-	deadline := time.Now().Add(s.LeaseTime)
+	start := time.Now()
+	// deadline is when to give up waiting for the client to return the
+	// delegation. It's set once a CB_RECALL has been sent, so recalls
+	// queued behind others to the same client aren't penalized.
+	var deadline time.Time
 	revoke := func(why string) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -202,14 +205,26 @@ func (m *stateManager) recall(d *delegState) {
 		if isClosed(d.done) || ctx.Err() != nil {
 			return
 		}
-		if time.Now().After(deadline) {
+		now := time.Now()
+		if !deadline.IsZero() && now.After(deadline) {
 			revoke("not returned within the lease time")
+			return
+		}
+		if deadline.IsZero() && now.Sub(start) > s.LeaseTime {
+			revoke("no working callback channel")
 			return
 		}
 		m.mu.Lock()
 		sess := m.clientBackchannelLocked(d.client)
+		leaseExpired := now.Sub(d.client.lastRenew) > s.LeaseTime
 		m.mu.Unlock()
 		if sess == nil {
+			if leaseExpired {
+				// A courtesy client, gone for now. Don't make
+				// the FS wait for it.
+				revoke("client's lease expired")
+				return
+			}
 			// The client may reconnect and bind a new backchannel.
 			if !wait(time.Second) {
 				return
@@ -217,6 +232,9 @@ func (m *stateManager) recall(d *delegState) {
 			continue
 		}
 		st, err := m.sendRecall(ctx, sess, d)
+		if deadline.IsZero() && (err == nil || attempt >= 2) {
+			deadline = time.Now().Add(s.LeaseTime)
+		}
 		switch {
 		case err != nil:
 			s.debugf("nfsv4: CB_RECALL to client %#x: %v", d.client.id, err)

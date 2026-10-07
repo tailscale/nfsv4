@@ -52,8 +52,10 @@ type conn struct {
 	closed    bool                   // guarded by cbMu
 
 	// backFor is the set of sessions this connection is bound to as
-	// a backchannel. It's guarded by the stateManager's mutex.
+	// a backchannel, and gone is whether the connection has closed.
+	// They're guarded by the stateManager's mutex.
 	backFor map[*session]bool
+	gone    bool
 }
 
 func newConn(s *Server, nc net.Conn) *conn {
@@ -120,7 +122,11 @@ func (c *conn) serve() error {
 			putBuf(bp)
 			return nil
 		}
+		// The connection's own s.wg count keeps this Add from racing
+		// with Server.Close's Wait.
+		c.srv.wg.Add(1)
 		go func() {
+			defer c.srv.wg.Done()
 			defer func() { <-c.inflight }()
 			defer putBuf(bp)
 			c.handleCall(msg)

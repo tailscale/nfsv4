@@ -142,11 +142,22 @@ func decodePath(h nfsv4.FileHandle) (comps []pathComp, fullHash uint64, err erro
 			// Verbatim components never follow hashed ones.
 			return nil, 0, errBadHandle
 		}
-		comps = append(comps, pathComp{name: string(b[:l])})
+		name := string(b[:l])
+		if !validName(name) {
+			return nil, 0, errBadHandle
+		}
+		comps = append(comps, pathComp{name: name})
 		b = b[l:]
 	}
 	if hashed || len(comps) == 0 {
 		return nil, 0, errBadHandle
 	}
 	return comps, 0, nil
+}
+
+// validName reports whether name is a valid path component: not empty,
+// "." or "..", and without slashes or NULs. Handles are client-supplied, so
+// this keeps crafted handles from escaping the tree.
+func validName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\x00")
 }

@@ -85,11 +85,12 @@ func (cp *compound) opLookup(d *xdr.Decoder, e *xdr.Encoder) Status {
 	if st := cp.checkName(name); st != OK {
 		return st
 	}
+	epoch := cp.m.invalEpochNow()
 	fh, attrs, err := cp.s.FS.Lookup(&cp.req, cp.curFH, name)
 	if err != nil {
 		return cp.fsErr("Lookup", err)
 	}
-	cp.setFH(fh, attrs)
+	cp.setFHEpoch(fh, attrs, epoch)
 	return OK
 }
 
@@ -362,10 +363,14 @@ func (cp *compound) opReadDir(d *xdr.Decoder, e *xdr.Encoder) Status {
 		n++
 		return true
 	}
+	fsWant := want.AndNot(serverAttrs)
+	if wantFH {
+		fsWant.Set(AttrFileHandle)
+	}
 	res, err := cp.s.FS.ReadDir(&cp.req, cp.curFH, ReadDirArgs{
 		Cookie:   cookie,
 		Verifier: verf,
-		Want:     want.AndNot(serverAttrs),
+		Want:     fsWant,
 	}, emit)
 	if err != nil {
 		return cp.fsErr("ReadDir", err)

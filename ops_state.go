@@ -118,9 +118,9 @@ func (cp *compound) opOpen(d *xdr.Decoder, e *xdr.Encoder) Status {
 		}
 	} else {
 		fh = cp.curFH
-		attrs = cp.curAttrs
-		if !cp.curAttrsWant.ContainsAll(openAttrsWant) {
-			attrs = nil
+		if cp.curAttrs != nil && cp.curAttrsWant.ContainsAll(openAttrsWant) {
+			attrs = cp.curAttrs
+			epoch = cp.curAttrsEpoch
 		}
 	}
 	if attrs == nil {
@@ -156,21 +156,11 @@ func (cp *compound) opOpen(d *xdr.Decoder, e *xdr.Encoder) Status {
 		}
 	}
 
-	if op, ok := cp.s.FS.(Opener); ok {
-		if err := op.Open(&cp.req, fh, attrs); err != nil {
-			return cp.fsErr("Open", err)
-		}
-	}
-
-	var policy Delegation
-	delegClaim := claimType == claimDelegateCur || claimType == claimDelegCurFH
-	if dg, ok := cp.s.FS.(Delegator); ok && !delegClaim && want != shareAccessWantNoDeleg && want != shareAccessWantCancel {
-		policy = dg.Delegate(&cp.req, fh, attrs)
-	}
-
 	m := cp.m
-	m.mu.Lock()
 	cl := cp.cl
+	delegClaim := claimType == claimDelegateCur || claimType == claimDelegCurFH
+	key := openKey{owner: string(owner), fh: string(fh)}
+	m.mu.Lock()
 	if delegClaim {
 		// The client is converting opens it did locally under a
 		// delegation into real opens, typically while returning the
@@ -185,7 +175,25 @@ func (cp *compound) opOpen(d *xdr.Decoder, e *xdr.Encoder) Status {
 			return ErrBadStateID
 		}
 	}
-	key := openKey{owner: string(owner), fh: string(fh)}
+	_, isReopen := cl.opens[key]
+	m.mu.Unlock()
+
+	// Tell the Opener about new open states only, so its Open and Close
+	// calls balance.
+	opener, _ := cp.s.FS.(Opener)
+	if opener != nil && !isReopen {
+		if err := opener.Open(&cp.req, fh, attrs); err != nil {
+			return cp.fsErr("Open", err)
+		}
+	}
+
+	var policy Delegation
+	dg, isDelegator := cp.s.FS.(Delegator)
+	if isDelegator && !delegClaim && want != shareAccessWantNoDeleg && want != shareAccessWantCancel {
+		policy = dg.Delegate(&cp.req, fh, attrs)
+	}
+
+	m.mu.Lock()
 	o := cl.opens[key]
 	if o == nil {
 		o = &openState{
@@ -197,6 +205,9 @@ func (cp *compound) opOpen(d *xdr.Decoder, e *xdr.Encoder) Status {
 		}
 		cl.opens[key] = o
 		m.states[o.other] = o
+	} else if opener != nil && !isReopen {
+		// A concurrent OPEN by the same owner created it meanwhile.
+		defer opener.Close(fh)
 	}
 	o.seqid++
 	o.access |= access
@@ -204,13 +215,21 @@ func (cp *compound) opOpen(d *xdr.Decoder, e *xdr.Encoder) Status {
 	sid := stateID{seqid: o.seqid, other: o.other}
 
 	var deleg *delegState
-	why := uint32(wndNotWanted)
+	var why uint32
+	switch {
+	case want == shareAccessWantCancel:
+		why = wndCancelled
+	case !isDelegator:
+		why = wndNotSuppFtype
+	default:
+		why = wndNotWanted
+	}
 	if policy.Grant {
 		deleg, why = cp.grantDelegLocked(fh, false, policy, epoch)
 	}
 	m.mu.Unlock()
 
-	cp.setFH(fh, attrs)
+	cp.setFHEpoch(fh, attrs, epoch)
 	cp.curAttrsWant = openAttrsWant
 	cp.curSID = &sid
 
@@ -619,11 +638,11 @@ func (cp *compound) opGetDirDelegation(d *xdr.Decoder, e *xdr.Encoder) Status {
 	if st := cp.needFH(); st != OK {
 		return st
 	}
-	epoch := cp.m.invalEpochNow()
 	a, st := cp.getAttrs(openAttrsWant)
 	if st != OK {
 		return st
 	}
+	epoch := cp.curAttrsEpoch
 	if a.Type != TypeDir {
 		return ErrNotDir
 	}

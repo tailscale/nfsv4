@@ -947,3 +947,53 @@ func TestBackchannelRebind(t *testing.T) {
 		t.Errorf("SEQUENCE flags %#x after binding", r.SeqFlags)
 	}
 }
+
+func TestSequenceHighestSlot(t *testing.T) {
+	c := newSessionClient(t, &nfsv4.Server{FS: testfs.New()}, false)
+	r, err := c.Do(rawSeq(c, 1, 0, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, r, nfsv4.OpSequence)
+	r.D.FixedOpaque(16)
+	r.D.Uint32() // seq
+	r.D.Uint32() // slot
+	highest, target := r.D.Uint32(), r.D.Uint32()
+	if want := uint32(len(c.SlotSeq) - 1); highest != want || target != want {
+		t.Errorf("highest, target = %d, %d; want %d (not an echo of the client's)", highest, target, want)
+	}
+}
+
+func TestReadDirFileHandleOnly(t *testing.T) {
+	fs := newTestTree()
+	c := newSessionClient(t, &nfsv4.Server{FS: fs}, false)
+	b, slot := c.Seq()
+	lookupPath(b, "sub")
+	e := b.Op(nfsv4.OpReadDir)
+	e.Uint64(0)
+	e.Uint64(0)
+	e.Uint32(0)
+	e.Uint32(8192)
+	encodeBitmap(e, nfsv4.AttrFileHandle)
+	r, err := c.DoSeq(b, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipLookups(t, r, 1)
+	must(t, r, nfsv4.OpReadDir)
+	r.D.Uint64()
+	n := 0
+	for r.D.Bool() {
+		r.D.Uint64()
+		name := r.D.String(255)
+		skipBitmap(r.D)
+		vals := xdr.NewDecoder(r.D.Opaque(200))
+		if fh := vals.Opaque(128); string(fh) != string(fs.Handle("/sub/"+name)) {
+			t.Errorf("%s: filehandle %x", name, fh)
+		}
+		n++
+	}
+	if n != 3 {
+		t.Errorf("got %d entries", n)
+	}
+}

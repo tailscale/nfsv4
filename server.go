@@ -211,12 +211,20 @@ func (s *Server) Serve(ln net.Listener) error {
 			return err
 		}
 		tempDelay = 0
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			s.ServeConn(c)
-		}()
+		go s.ServeConn(c)
 	}
+}
+
+// addWork adds one to s.wg, unless the server is closed, in which case it
+// reports false. The caller must call s.wg.Done when the work is done.
+func (s *Server) addWork() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.wg.Add(1)
+	return true
 }
 
 func (s *Server) isClosed() bool {
@@ -237,11 +245,13 @@ func (s *Server) ServeConn(c net.Conn) error {
 		return ErrServerClosed
 	}
 	s.conns[cc] = struct{}{}
+	s.wg.Add(1)
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		delete(s.conns, cc)
 		s.mu.Unlock()
+		s.wg.Done()
 	}()
 	return cc.serve()
 }
