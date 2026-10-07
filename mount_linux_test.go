@@ -27,3 +27,9 @@ func dropCaches() error {
 }
 
 const umountCmd = "umount"
+
+// dropPageCache drops the kernel's page cache, keeping cached dentries and
+// inodes (and so the client's cached filehandles).
+func dropPageCache() error {
+	return asRoot("sh", "-c", "echo 1 > /proc/sys/vm/drop_caches").Run()
+}

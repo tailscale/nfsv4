@@ -27,3 +27,6 @@ func dropCaches() error {
 }
 
 const umountCmd = "/sbin/umount"
+
+// dropPageCache drops the kernel's buffer cache.
+func dropPageCache() error { return dropCaches() }

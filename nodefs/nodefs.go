@@ -46,7 +46,10 @@ import (
 // devices, need only implement Node).
 type Node interface {
 	// Attr returns the node's attributes. Type is required. If FileID
-	// is zero, a stable FileID is derived from the node's path.
+	// is zero, a stable FileID is derived from the node's path, which
+	// is usually best: a node's FileID must stay the same across server
+	// restarts, like its filehandle, or clients treat it as a different
+	// object (returning ESTALE).
 	Attr(r *nfsv4.Request) (*nfsv4.Attrs, error)
 }
 

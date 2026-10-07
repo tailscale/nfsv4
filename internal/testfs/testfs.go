@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tailscale/nfsv4"
@@ -21,6 +22,15 @@ type FS struct {
 	mu    sync.Mutex
 	nodes map[uint64]*node
 	next  uint64
+
+	// Gen, if non-zero, is included in all filehandles except the
+	// root's, and filehandles with a different Gen are stale. Setting
+	// it differently in two FS instances simulates a server whose
+	// filehandles don't survive restarts.
+	Gen uint64
+
+	// StaleHits counts uses of stale filehandles.
+	StaleHits atomic.Int64
 
 	// DelegatePolicy, if non-nil, decides delegations.
 	DelegatePolicy func(path string, a *nfsv4.Attrs) nfsv4.Delegation
@@ -134,25 +144,44 @@ func (fs *FS) Handle(p string) nfsv4.FileHandle {
 		}
 		n = fs.nodes[ino]
 	}
-	return fh(n.ino)
+	return fs.fh(n.ino)
 }
 
-func fh(ino uint64) nfsv4.FileHandle {
-	return binary.BigEndian.AppendUint64(nil, ino)
+func (fs *FS) fh(ino uint64) nfsv4.FileHandle {
+	var h nfsv4.FileHandle
+	if fs.Gen != 0 && ino != 1 {
+		h = binary.BigEndian.AppendUint64(h, fs.Gen)
+	}
+	return binary.BigEndian.AppendUint64(h, ino)
 }
 
 func (fs *FS) nodeLocked(h nfsv4.FileHandle) (*node, error) {
-	if len(h) != 8 {
+	var ino uint64
+	switch {
+	case len(h) == 8:
+		ino = binary.BigEndian.Uint64(h)
+		if fs.Gen != 0 && ino != 1 {
+			fs.StaleHits.Add(1)
+			return nil, nfsv4.ErrStale
+		}
+	case len(h) == 16 && fs.Gen != 0:
+		if binary.BigEndian.Uint64(h) != fs.Gen {
+			fs.StaleHits.Add(1)
+			return nil, nfsv4.ErrStale
+		}
+		ino = binary.BigEndian.Uint64(h[8:])
+	default:
 		return nil, nfsv4.ErrBadHandle
 	}
-	n, ok := fs.nodes[binary.BigEndian.Uint64(h)]
+	n, ok := fs.nodes[ino]
 	if !ok {
+		fs.StaleHits.Add(1)
 		return nil, nfsv4.ErrStale
 	}
 	return n, nil
 }
 
-func (fs *FS) Root(r *nfsv4.Request) (nfsv4.FileHandle, error) { return fh(1), nil }
+func (fs *FS) Root(r *nfsv4.Request) (nfsv4.FileHandle, error) { return fs.fh(1), nil }
 
 func (fs *FS) GetAttr(r *nfsv4.Request, h nfsv4.FileHandle, want nfsv4.AttrMask) (*nfsv4.Attrs, error) {
 	fs.mu.Lock()
@@ -180,7 +209,7 @@ func (fs *FS) Lookup(r *nfsv4.Request, dir nfsv4.FileHandle, name string) (nfsv4
 		return nil, nil, nfsv4.ErrNoEnt
 	}
 	a := fs.nodes[ino].attrs
-	return fh(ino), &a, nil
+	return fs.fh(ino), &a, nil
 }
 
 func (fs *FS) LookupParent(r *nfsv4.Request, dir nfsv4.FileHandle) (nfsv4.FileHandle, error) {
@@ -190,7 +219,7 @@ func (fs *FS) LookupParent(r *nfsv4.Request, dir nfsv4.FileHandle) (nfsv4.FileHa
 	if err != nil {
 		return nil, err
 	}
-	return fh(n.parent), nil
+	return fs.fh(n.parent), nil
 }
 
 func (fs *FS) ReadDir(r *nfsv4.Request, dir nfsv4.FileHandle, args nfsv4.ReadDirArgs, emit func(nfsv4.DirEntry) bool) (nfsv4.ReadDirResult, error) {
@@ -217,7 +246,7 @@ func (fs *FS) ReadDir(r *nfsv4.Request, dir nfsv4.FileHandle, args nfsv4.ReadDir
 		}
 		c := fs.nodes[n.children[name]]
 		a := c.attrs
-		ents = append(ents, nfsv4.DirEntry{Name: name, Cookie: cookie, Handle: fh(c.ino), Attrs: &a})
+		ents = append(ents, nfsv4.DirEntry{Name: name, Cookie: cookie, Handle: fs.fh(c.ino), Attrs: &a})
 	}
 	fs.mu.Unlock()
 	for _, ent := range ents {

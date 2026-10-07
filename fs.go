@@ -172,7 +172,10 @@ type Attrs struct {
 	SpaceUsed uint64
 
 	// FileID is the object's unique number within its filesystem (its
-	// "inode number"). It must be unique and stable.
+	// "inode number"). It must be unique, and as stable as the object's
+	// filehandle: clients that see a different FileID for a filehandle
+	// they know (such as after a server restart) consider the object
+	// gone and return ESTALE to applications.
 	FileID uint64
 
 	// MountedOnFileID is the mounted_on_fileid attribute. If zero, the

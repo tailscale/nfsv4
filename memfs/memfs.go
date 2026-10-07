@@ -28,10 +28,9 @@ import (
 type FS struct {
 	*nodefs.FS
 
-	mu     sync.Mutex
-	root   *node
-	srv    *nfsv4.Server
-	nextID uint64
+	mu   sync.Mutex
+	root *node
+	srv  *nfsv4.Server
 }
 
 // node is a file, directory, or symlink.
@@ -64,14 +63,15 @@ func (m *FS) SetServer(srv *nfsv4.Server) {
 }
 
 func (m *FS) newNode(t nfsv4.FileType, mode uint32) *node {
-	m.nextID++
 	now := time.Now()
 	n := &node{
 		fs: m,
 		attrs: nfsv4.Attrs{
+			// FileID is left zero, so nodefs derives it from the
+			// path, keeping it stable across restarts regardless of
+			// the order in which the tree is built.
 			Type:       t,
 			Mode:       mode,
-			FileID:     m.nextID + 1, // 1 is the root's FileID by convention
 			Change:     1,
 			ModTime:    now,
 			ChangeTime: now,
@@ -80,9 +80,6 @@ func (m *FS) newNode(t nfsv4.FileType, mode uint32) *node {
 	if t == nfsv4.TypeDir {
 		n.children = make(map[string]*node)
 		n.attrs.Size = 4096
-	}
-	if m.root == nil {
-		n.attrs.FileID = 1
 	}
 	return n
 }

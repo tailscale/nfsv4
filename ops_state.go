@@ -611,7 +611,16 @@ func (cp *compound) opDelegReturn(d *xdr.Decoder, e *xdr.Encoder) Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st, status := m.lookupStateLocked(cp.cl, sid, cp.curSID)
-	if status != OK {
+	switch status {
+	case OK:
+	case ErrBadStateID, ErrOldStateID:
+		// Returning a delegation the server doesn't know (typically
+		// one from before a server restart, which can't be
+		// reclaimed) has nothing to undo, so it succeeds. The macOS
+		// client (as of macOS 26) wedges the file if it fails.
+		cp.s.debugf("nfsv4: client %#x returned unknown delegation %v for %x (%v); ignoring", cp.cl.id, sid, cp.curFH, status)
+		return OK
+	default:
 		return status
 	}
 	ds, ok := st.(*delegState)
