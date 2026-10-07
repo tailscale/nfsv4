@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/tailscale/nfsv4"
-	"github.com/tailscale/nfsv4/internal/testfs"
 )
 
 var mountTest = flag.Bool("mount", os.Getenv("NFSV4_MOUNT_TEST") != "", "run tests that mount the server with the kernel NFS client (requires passwordless sudo)")
@@ -71,23 +70,6 @@ func unmount(t *testing.T, dir string) {
 		t.Logf("umount: %v, %s; trying lazy unmount", err, out)
 		exec.Command("sudo", "-n", "umount", "-l", "-f", dir).Run()
 	}
-}
-
-func newTestTree() *testfs.FS {
-	fs := testfs.New()
-	fs.WriteFile("/hello.txt", []byte("hello, world\n"), 0o644)
-	fs.WriteFile("/sub/dir/file.go", []byte("package x\n"), 0o444)
-	fs.WriteFile("/sub/exec.sh", []byte("#!/bin/sh\necho hi\n"), 0o755)
-	fs.Symlink("../hello.txt", "/sub/link")
-	big := make([]byte, 5<<20+123)
-	for i := range big {
-		big[i] = byte(i * 7)
-	}
-	fs.WriteFile("/big.bin", big, 0o644)
-	for i := range 300 {
-		fs.WriteFile(fmt.Sprintf("/many/f%03d", i), []byte(fmt.Sprint(i)), 0o644)
-	}
-	return fs
 }
 
 func TestKernelMountBasics(t *testing.T) {
