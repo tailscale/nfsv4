@@ -131,6 +131,17 @@ func (cp *compound) opLookupp(d *xdr.Decoder, e *xdr.Encoder) Status {
 	} else if isRoot {
 		return ErrNoEnt
 	}
+	a, st := cp.getAttrs(MakeAttrMask(AttrType))
+	if st != OK {
+		return st
+	}
+	switch a.Type {
+	case TypeDir, TypeAttrDir:
+	case TypeSymlink:
+		return ErrSymlink
+	default:
+		return ErrNotDir
+	}
 	fh, err := cp.s.FS.LookupParent(&cp.req, cp.curFH)
 	if err != nil {
 		return cp.fsErr("LookupParent", err)
