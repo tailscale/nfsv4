@@ -1,0 +1,42 @@
+{
+  "upstream": "https://github.com/linux-nfs/pynfs.git",
+  "revision": "cd4701827a8261fedbfb4c6e39029fb9671321a6",
+  "minorversions": [1, 2],
+  "required_options": ["--noinit", "--nocleanup"],
+  "fixtures": {
+    "usefile": "/tree/file",
+    "usedir": "/tree/dir",
+    "uselink": "/tree/link",
+    "home": "/tmp",
+    "file_contents": "This is the file test data.",
+    "symlink_target": "/etc/X11"
+  },
+  "filesystem_independent": [
+    "SEQ7", "SEQ1", "SEQ12", "SEQ6", "SEQ9f", "SEQ9e", "SEQ9c", "SEQ9a", "SEQ11", "SEQ2", "SEQ4", "SEQ8", "SEQ5", "SEQ13",
+    "CSESS28", "CSESS25", "CSESS2b", "CSESS2", "CSESS1", "CSESS6", "CSESS5b", "CSESS5a", "CSESS5", "CSESS27", "CSESS26", "CSESS19", "CSESS18", "CSESS17", "CSESS10", "CSESS9", "CSESS23", "CSESS3", "CSESS22", "CSESS200", "CSESS24", "CSESS4", "CSESS16a", "CSESS16", "CSESS8", "CSESS7", "CSESS15",
+    "EID6", "EID6h", "EID6g", "EID6f", "EID6e", "EID6d", "EID6c", "EID6b", "EID6a", "EID1b", "EID7", "EID1", "EID8", "EID5h", "EID5g", "EID5fb", "EID5f", "EID5e", "EID5d", "EID5c", "EID5b", "EID5a", "EID2", "EID3", "EID4"
+  ],
+  "readonly_fixture_selection": [
+    "COMP1", "COMP2", "COMP3", "COMP4a", "COMP4b", "COMP5",
+    "LKPP1d", "LKPP1r", "LKPP1a", "LKPP2", "LKPP3",
+    "PUTFH1r", "PUTFH1a", "PUTFH1d", "PUTFH2", "VF1r",
+    "SECNN1", "SECNN2", "SECNN3", "SECNN4",
+    "DESCID1", "DESCID2", "DESCID3", "DESCID4", "DESCID5", "DESCID6", "DESCID7", "DESCID8",
+    "DSESS9001", "DSESS9004", "DSESS9005", "RECC1", "RECC4"
+  ],
+  "slow_filesystem_independent": ["EID9"],
+  "dependency_notes": {
+    "CSESS6": "Depends on CSESS9. Forced in the recorded run to inspect behavior despite its failing dependency; not an independent defect."
+  },
+  "excluded": {
+    "EID50": "Requires SSV/GSS state protection, outside supported security.",
+    "CSESS29": "10000 CREATE_SESSION attempts; not needed for initial protocol coverage.",
+    "SEQ9b,SEQ10b": "Create and rename a writable file; read-only adaptations reported separately.",
+    "SEQ9d": "Rename validation can return ROFS before INVAL on a read-only server.",
+    "DELEG5,DELEG6,DELEG7": "Share create_session flags but require writable OPEN setup. Use exact IDs, not broad flags.",
+    "SEC1,SEC2,DSESS1,OPEN*,RECC2,RECC3": "Writable setup or writable/grace assumptions; adaptations reported separately.",
+    "LKPP1b,LKPP1c,LKPP1f,LKPP1s,PUTFH1b,PUTFH1c,PUTFH1f,PUTFH1s": "Require special-node fixtures not provided by this export.",
+    "HOME,LOOK1,LOOK2,LOOK3,LOOK4": "st_lookup.py is disabled in upstream server41tests/__init__.py; adapted probes cover these requests.",
+    "ACL,krb,pNFS,xattr,copy,sparse,reboot,courtesy": "Unsupported optional features, writable setup, or external server lifecycle requirements."
+  }
+}

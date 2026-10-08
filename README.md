@@ -95,5 +95,10 @@ Among other things, they check:
   carried over), including open files and processes whose working
   directory is deep inside the mount
 
+Independent read-only checks with pynfs and Linux client workloads with
+NFSTest are documented in [the testing report](doc/conformance-testing.md).
+See [tests/conformance](tests/conformance) for pinned selections, runners,
+and results. These checks are not a full protocol compliance certification.
+
 Read-only only: no writes, no NFSv4.0, no Kerberos, no ACLs or extended
 attributes, no pNFS.
