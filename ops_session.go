@@ -462,11 +462,13 @@ func (cp *compound) opSequence(d *xdr.Decoder, e *xdr.Encoder) Status {
 	case seq == sl.seqid && sl.seqid == 0:
 		return ErrSeqMisordered // never used
 	case seq == sl.seqid:
-		if sl.inUse {
+		if sl.inUse || sl.reply == nil {
 			return ErrDelay
 		}
-		if sl.reply == nil {
-			return ErrRetryUncachedRep
+		// The cached reply includes the original tag and SEQUENCE
+		// metadata. Include the current RPC header in its size.
+		if len(sl.reply)+cp.replyHeaderLen > int(sess.fore.maxResponseSize) {
+			return ErrRepTooBig
 		}
 		cp.replay = sl.reply
 		return OK

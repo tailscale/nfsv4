@@ -185,7 +185,9 @@ type session struct {
 type slot struct {
 	seqid uint32
 	inUse bool
-	reply []byte // cached reply for seqid, if the client asked for caching
+	// reply contains the full reply or SEQUENCE and the next operation's
+	// retry error. It is set before inUse becomes false.
+	reply []byte
 }
 
 // stateManager holds all client state for a Server.
