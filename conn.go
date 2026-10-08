@@ -51,9 +51,10 @@ type conn struct {
 	cbPending map[uint32]chan []byte // XID of outgoing callback → reply
 	closed    bool                   // guarded by cbMu
 
-	// backFor is the set of sessions this connection is bound to as
-	// a backchannel, and gone is whether the connection has closed.
-	// They're guarded by the stateManager's mutex.
+	// foreFor and backFor contain the sessions bound to this connection.
+	// gone reports whether the connection has closed.
+	// The state manager mutex guards these fields.
+	foreFor map[*session]bool
 	backFor map[*session]bool
 	gone    bool
 }

@@ -217,6 +217,7 @@ func (cp *compound) opCreateSession(d *xdr.Decoder, e *xdr.Encoder) Status {
 	}
 	if seq == cl.csSeq-1 && cl.csReply != nil {
 		// A retransmission of the previous CREATE_SESSION.
+		m.bindCreateReplyLocked(cl.csReply, cp.c)
 		e.FixedOpaque(cl.csReply)
 		return OK
 	}
@@ -289,6 +290,7 @@ func (cp *compound) opCreateSession(d *xdr.Decoder, e *xdr.Encoder) Status {
 	}
 	m.sessions[sess.id] = sess
 	cl.sessions[sess.id] = sess
+	m.bindForeLocked(sess, cp.c)
 	cp.s.debugf("nfsv4: client %#x (%s) created session: flags %#x (granted %#x), %d slots, back chan %+v",
 		cl.id, cl.info.ImplName, flags, rflags, len(sess.slots), back)
 
@@ -317,8 +319,11 @@ func (cp *compound) opDestroySession(d *xdr.Decoder, e *xdr.Encoder) Status {
 	if sess == nil {
 		return ErrBadSession
 	}
-	if cp.sess != nil && cp.sess.client != sess.client {
-		return ErrBadSession
+	if cp.sess == sess && cp.opIdx != cp.numOps-1 {
+		return ErrNotOnlyOp
+	}
+	if !cp.c.foreFor[sess] && !cp.c.backFor[sess] {
+		return ErrConnNotBoundToSession
 	}
 	m.destroySessionLocked(sess)
 	return OK
@@ -354,6 +359,9 @@ func (cp *compound) opBindConnToSession(d *xdr.Decoder, e *xdr.Encoder) Status {
 	if st := decodeErr(d); st != OK {
 		return st
 	}
+	if cp.numOps != 1 {
+		return ErrNotOnlyOp
+	}
 	m := cp.m
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -374,13 +382,16 @@ func (cp *compound) opBindConnToSession(d *xdr.Decoder, e *xdr.Encoder) Status {
 	}
 	if rdir&cdfsBack != 0 {
 		if !sess.backGranted {
-			if rdir == cdfsBack {
+			if dir == cdfcBack || dir == cdfcBackOrBoth {
 				return ErrInval
 			}
 			rdir = cdfsFore
 		} else {
 			m.bindBackLocked(sess, cp.c)
 		}
+	}
+	if rdir&cdfsFore != 0 {
+		m.bindForeLocked(sess, cp.c)
 	}
 	sess.client.lastRenew = time.Now()
 	e.FixedOpaque(sid[:])
@@ -417,6 +428,7 @@ func (cp *compound) opSequence(d *xdr.Decoder, e *xdr.Encoder) Status {
 	if cp.reqLen > int(sess.fore.maxRequestSize)+1024 {
 		return ErrReqTooBig
 	}
+	m.bindForeLocked(sess, cp.c)
 	sl := sess.slots[slotID]
 	switch {
 	case seq == sl.seqid+1:

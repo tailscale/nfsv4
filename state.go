@@ -167,6 +167,9 @@ type session struct {
 	back   channelAttrs
 	slots  []*slot
 
+	// The state manager mutex guards the fore channel connection set.
+	foreConns map[*conn]bool
+
 	// Backchannel parameters.
 	backGranted bool
 	cbProg      uint32
@@ -320,10 +323,45 @@ func (m *stateManager) destroyClientLocked(cl *client) {
 func (m *stateManager) destroySessionLocked(sess *session) {
 	delete(m.sessions, sess.id)
 	delete(sess.client.sessions, sess.id)
+	for c := range sess.foreConns {
+		delete(c.foreFor, sess)
+	}
+	sess.foreConns = nil
 	for _, c := range sess.backConns {
 		delete(c.backFor, sess)
 	}
 	sess.backConns = nil
+}
+
+// bindForeLocked binds c as a fore channel connection for sess.
+func (m *stateManager) bindForeLocked(sess *session, c *conn) {
+	if c.gone || c.foreFor[sess] {
+		return
+	}
+	if c.foreFor == nil {
+		c.foreFor = make(map[*session]bool)
+	}
+	if sess.foreConns == nil {
+		sess.foreConns = make(map[*conn]bool)
+	}
+	c.foreFor[sess] = true
+	sess.foreConns[c] = true
+}
+
+// bindCreateReplyLocked associates the connection on a CREATE_SESSION retry.
+// The caller must hold the state manager lock.
+func (m *stateManager) bindCreateReplyLocked(reply []byte, c *conn) {
+	d := xdr.NewDecoder(reply)
+	var sid sessionID
+	copy(sid[:], d.FixedOpaque(sessionIDSize))
+	d.Uint32() // sequence ID
+	flags := d.Uint32()
+	if sess := m.sessions[sid]; d.Err() == nil && sess != nil {
+		m.bindForeLocked(sess, c)
+		if flags&createSessionConnBackChan != 0 {
+			m.bindBackLocked(sess, c)
+		}
+	}
 }
 
 // bindBackLocked binds c as a backchannel connection for sess.
@@ -341,6 +379,10 @@ func (m *stateManager) bindBackLocked(sess *session, c *conn) {
 func (m *stateManager) connClosed(c *conn) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for sess := range c.foreFor {
+		delete(sess.foreConns, c)
+	}
+	c.foreFor = nil
 	for sess := range c.backFor {
 		for i, bc := range sess.backConns {
 			if bc == c {
