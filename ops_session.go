@@ -224,6 +224,12 @@ func (cp *compound) opCreateSession(d *xdr.Decoder, e *xdr.Encoder) Status {
 	if seq != cl.csSeq {
 		return ErrSeqMisordered
 	}
+	if flags & ^uint32(createSessionPersist|createSessionConnBackChan|createSessionConnRDMA) != 0 {
+		return ErrInval
+	}
+	if fore.maxRequestSize < minSessionRequestSize || fore.maxResponseSize < minSessionResponseSize {
+		return ErrTooSmall
+	}
 	if fore.maxOperations < 2 || fore.maxRequests < 1 {
 		return ErrInval
 	}
@@ -425,11 +431,26 @@ func (cp *compound) opSequence(d *xdr.Decoder, e *xdr.Encoder) Status {
 	if cp.numOps > int(sess.fore.maxOperations) {
 		return ErrTooManyOps
 	}
-	if cp.reqLen > int(sess.fore.maxRequestSize)+1024 {
+	if cp.reqLen > int(sess.fore.maxRequestSize) {
 		return ErrReqTooBig
 	}
 	m.bindForeLocked(sess, cp.c)
 	sl := sess.slots[slotID]
+	// A retry uses the stored reply, not the new tag or cache request.
+	if seq != sl.seqid || sl.seqid == 0 {
+		// Check the SEQUENCE reply before the slot state changes. Include the
+		// RPC header and leave room for an error from the next operation.
+		replySize := cp.replyHeaderLen + e.Len() - cp.replyStart + 36
+		if cp.numOps > 1 {
+			replySize += 8
+		}
+		if replySize > int(sess.fore.maxResponseSize) {
+			return ErrRepTooBig
+		}
+		if cacheThis && replySize > int(sess.fore.maxResponseCached) {
+			return ErrRepTooBigToCache
+		}
+	}
 	switch {
 	case seq == sl.seqid+1:
 		// A new request.
@@ -464,7 +485,7 @@ func (cp *compound) opSequence(d *xdr.Decoder, e *xdr.Encoder) Status {
 	cp.slotID = slotID
 	cp.seqID = seq
 	cp.cacheThis = cacheThis
-	cp.maxResp = int(sess.fore.maxResponseSize)
+	cp.maxResp = int(sess.fore.maxResponseSize) - cp.replyHeaderLen
 	info := cl.info // a copy, as EXCHANGE_ID may update it concurrently
 	cp.req.Client = &info
 
