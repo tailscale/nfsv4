@@ -50,7 +50,8 @@ func (cp *compound) opOpen(d *xdr.Decoder, e *xdr.Encoder) Status {
 	)
 	switch claimType {
 	case claimNull, claimDelegatePrev:
-		name = d.String(maxOpaque)
+		// component4 has no XDR length bound. The request is bounded.
+		name = d.String(d.Remaining())
 	case claimPrevious:
 		// After a server restart, the client reclaims its opens. Opens
 		// can't conflict on a read-only server, so reclaims are always
@@ -59,7 +60,7 @@ func (cp *compound) opOpen(d *xdr.Decoder, e *xdr.Encoder) Status {
 		d.Uint32() // delegation type being reclaimed
 	case claimDelegateCur:
 		delegSID = decodeStateID(d)
-		name = d.String(maxOpaque)
+		name = d.String(d.Remaining())
 	case claimFH, claimDelegPrevFH:
 	case claimDelegCurFH:
 		delegSID = decodeStateID(d)

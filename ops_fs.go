@@ -79,6 +79,8 @@ func (cp *compound) opRestoreFH(d *xdr.Decoder, e *xdr.Encoder) Status {
 }
 
 // checkName validates a component name from a client.
+// The byte limit is a file system limit, not an XDR limit. Names can
+// contain non-UTF-8 bytes; pass those bytes to the file system unchanged.
 func (cp *compound) checkName(name string) Status {
 	switch {
 	case name == "":
@@ -94,7 +96,8 @@ func (cp *compound) checkName(name string) Status {
 }
 
 func (cp *compound) opLookup(d *xdr.Decoder, e *xdr.Encoder) Status {
-	name := d.String(maxOpaque)
+	// RFC 8881 component4 has no XDR length bound. The request is bounded.
+	name := d.String(d.Remaining())
 	if st := decodeErr(d); st != OK {
 		return st
 	}
@@ -500,7 +503,7 @@ func (cp *compound) checkReadStateID(sid stateID) Status {
 }
 
 func (cp *compound) opSecInfo(d *xdr.Decoder, e *xdr.Encoder) Status {
-	name := d.String(maxOpaque)
+	name := d.String(d.Remaining())
 	if st := decodeErr(d); st != OK {
 		return st
 	}
