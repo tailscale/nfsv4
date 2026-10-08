@@ -204,6 +204,7 @@ func (cp *compound) run(args []byte, e *xdr.Encoder) {
 	defer cp.finishSlot()
 
 	var status Status
+	var uncachedReply []byte
 	nres := 0
 	for i := range numOps {
 		cp.opIdx = i
@@ -213,6 +214,28 @@ func (cp *compound) run(args []byte, e *xdr.Encoder) {
 			break
 		}
 		resStart := e.Len()
+		if i == 1 && cp.slot != nil {
+			// Keep the original tag and successful SEQUENCE result.
+			// Do not execute the next operation again on a retry.
+			retryOp, retryStatus := op, ErrRetryUncachedRep
+			if op == OpIllegal || opHandlers[op] == nil || (cp.minor < 2 && isOp42(op)) {
+				retryOp, retryStatus = OpIllegal, ErrOpIllegal
+			} else {
+				switch op {
+				case OpOpenConfirm, OpRenew, OpSetClientID, OpSetClientIDConfirm, OpReleaseLockOwner:
+					retryStatus = ErrNotSupp
+				case OpSequence:
+					retryStatus = ErrSequencePos
+				}
+			}
+			retry := xdr.NewEncoder(nil)
+			retry.FixedOpaque(e.Bytes()[start:])
+			retry.PutUint32At(statusOff-start, uint32(retryStatus))
+			retry.PutUint32At(countOff-start, 2)
+			retry.Uint32(uint32(retryOp))
+			retry.Uint32(uint32(retryStatus))
+			uncachedReply = retry.Bytes()
+		}
 		e.Uint32(uint32(op))
 		stOff := e.Reserve(4)
 		bodyStart := e.Len()
@@ -255,10 +278,15 @@ func (cp *compound) run(args []byte, e *xdr.Encoder) {
 	e.PutUint32At(statusOff, uint32(status))
 	e.PutUint32At(countOff, uint32(nres))
 
-	if cp.slot != nil && cp.cacheThis {
+	if cp.slot != nil {
 		reply := e.Bytes()[start:]
+		// A successful SEQUENCE result must be cached. Cache the full
+		// reply for a singleton, even when cachethis is false.
+		if cp.numOps > 1 && (!cp.cacheThis || len(reply)+cp.replyHeaderLen > int(cp.sess.fore.maxResponseCached)) && uncachedReply != nil {
+			reply = uncachedReply
+		}
 		cp.m.mu.Lock()
-		if cp.slot.seqid == cp.seqID && len(reply)+cp.replyHeaderLen <= int(cp.sess.fore.maxResponseCached) {
+		if cp.slot.seqid == cp.seqID {
 			cp.slot.reply = append([]byte(nil), reply...)
 		}
 		cp.m.mu.Unlock()

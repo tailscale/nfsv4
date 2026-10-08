@@ -240,8 +240,14 @@ func TestSequenceSlots(t *testing.T) {
 		t.Fatalf("second SEQUENCE: %v", st)
 	}
 	// A replay of an uncached request.
-	if _, st := do(2, 0, false); st != nfsv4.ErrRetryUncachedRep {
-		t.Errorf("uncached replay: %v", st)
+	if r, st := do(2, 0, false); st != nfsv4.OK || r.Status != nfsv4.ErrRetryUncachedRep || r.NumRes != 2 {
+		t.Fatalf("uncached replay: SEQUENCE %v, compound %v, %d results", st, r.Status, r.NumRes)
+	} else {
+		r.D.FixedOpaque(36)
+		expect(t, r, nfsv4.OpPutRootFH, nfsv4.ErrRetryUncachedRep)
+		if r.D.Err() != nil || r.D.Remaining() != 0 {
+			t.Fatalf("uncached replay has malformed or extra results: %v", r.D.Err())
+		}
 	}
 	if _, st := do(5, 0, false); st != nfsv4.ErrSeqMisordered {
 		t.Errorf("misordered: %v", st)
