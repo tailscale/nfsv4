@@ -29,7 +29,26 @@ func (cp *compound) opPutFH(d *xdr.Decoder, e *xdr.Encoder) Status {
 	if len(fh) == 0 {
 		return ErrBadHandle
 	}
-	cp.setFH(FileHandle(fh), nil)
+	epoch := cp.m.invalEpochNow()
+	a, err := cp.s.FS.GetAttr(&cp.req, FileHandle(fh), basicAttrs)
+	if err != nil {
+		st := cp.fsErr("GetAttr", err)
+		switch st {
+		case ErrBadHandle, ErrStale, ErrDelay, ErrMoved, ErrWrongSec, ErrServerFault:
+			return st
+		default:
+			// PUTFH cannot return other FS errors (RFC 8881, Section 15.2).
+			// The arguments are decoded above; a backend BADXDR is not valid here.
+			cp.s.logf("nfsv4: PUTFH: FS.GetAttr returned unsupported status %v: %v; returning NFS4ERR_SERVERFAULT", st, err)
+			return ErrServerFault
+		}
+	}
+	if a == nil {
+		cp.s.logf("nfsv4: FS.GetAttr returned nil attributes")
+		return ErrServerFault
+	}
+	cp.setFHEpoch(FileHandle(fh), a, epoch)
+	cp.curAttrsWant = basicAttrs
 	return OK
 }
 

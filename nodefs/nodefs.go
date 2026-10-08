@@ -340,7 +340,10 @@ func (fs *FS) resolve(r *nfsv4.Request, h nfsv4.FileHandle) (string, Node, error
 	case fmtTable:
 		// Table handles are volatile: they're only valid in the
 		// process that created them.
-		if len(h) != 17 || [8]byte(h[1:9]) != fs.instance {
+		if len(h) != 17 {
+			return "", nil, nfsv4.ErrBadHandle
+		}
+		if [8]byte(h[1:9]) != fs.instance {
 			return "", nil, nfsv4.ErrStale
 		}
 		fs.mu.Lock()

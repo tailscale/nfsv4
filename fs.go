@@ -30,9 +30,10 @@ type FileHandle []byte
 //
 // Methods are called concurrently. Methods that operate on a filehandle
 // should return ErrStale or ErrBadHandle for unknown filehandles.
-// Errors may be Status values (such as ErrNoEnt), which are sent to the
-// client as-is, or any other error, which is mapped to a Status (see
-// Server.Logf for errors that have no natural mapping).
+// Errors may be Status values (such as ErrNoEnt) or other errors that are
+// mapped to a Status (see Server.Logf for errors that have no natural mapping).
+// PUTFH uses GetAttr to validate handles and returns ErrServerFault if the
+// mapped error is not valid for that operation.
 //
 // Optional behavior is provided by implementing additional interfaces:
 // Delegator (cache control), Opener, Accesser, and StatFSer.
