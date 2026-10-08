@@ -66,6 +66,12 @@
 //     userspace networking. Delegations aren't granted to clients without
 //     one.
 //
+// A recall releases the delegation before a change. It does not disable
+// ordinary client caching after the delegation is returned. On Linux 7.0,
+// an already-open file can still return old data after a local change until
+// its attributes are revalidated. A cached name can also remain visible for
+// a short time after removal. The client mount options affect these delays.
+//
 // # Filehandles and restarts
 //
 // The server advertises persistent filehandles. Clients keep using

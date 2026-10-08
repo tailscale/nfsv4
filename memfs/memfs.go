@@ -6,8 +6,9 @@
 //
 // Files can be marked immutable, in which case clients are granted
 // delegations to cache them forever. Changes to mutable files and
-// directories first recall delegations (when SetServer has been called),
-// so clients see changes immediately.
+// directories first recall delegations (when SetServer has been called).
+// After a recall, clients can still use their ordinary attribute and data
+// caches. Changes become visible when the client revalidates those caches.
 package memfs
 
 import (
@@ -54,7 +55,7 @@ func New() *FS {
 	return m
 }
 
-// SetServer sets the server whose client caches are invalidated when files
+// SetServer sets the server whose delegations are recalled before files
 // change.
 func (m *FS) SetServer(srv *nfsv4.Server) {
 	m.mu.Lock()
