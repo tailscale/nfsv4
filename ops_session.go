@@ -4,6 +4,7 @@
 package nfsv4
 
 import (
+	"slices"
 	"time"
 
 	"github.com/tailscale/nfsv4/internal/oncrpc"
@@ -56,7 +57,8 @@ func (cp *compound) opExchangeID(d *xdr.Decoder, e *xdr.Encoder) Status {
 	if st := decodeErr(d); st != OK {
 		return st
 	}
-	if len(ownerID) == 0 {
+	const allowedFlags = exchgidSuppMovedRefer | exchgidSuppMovedMigr | exchgidBindPrincStateID | exchgidMaskPNFS | exchgidUpdConfirmedRecA
+	if len(ownerID) == 0 || flags & ^uint32(allowedFlags) != 0 {
 		return ErrInval
 	}
 	info.OwnerID = append([]byte(nil), ownerID...)
@@ -85,13 +87,28 @@ func (cp *compound) opExchangeID(d *xdr.Decoder, e *xdr.Encoder) Status {
 		if c.verifier != verifier {
 			return ErrNotSame
 		}
+		if !sameClientCred(c.cred, cp.req.Cred) {
+			return ErrPerm
+		}
 		cl = c
-	} else if c := or.confirmed; c != nil && c.verifier == verifier {
+	} else if c := or.confirmed; c != nil && c.verifier == verifier && sameClientCred(c.cred, cp.req.Cred) {
 		// The client already has a confirmed client ID and is asking
 		// again (for instance on a new connection, or to check for
 		// a server restart).
 		cl = c
 	} else {
+		if c := or.confirmed; c != nil && !sameClientCred(c.cred, cp.req.Cred) {
+			// A different user can replace only idle or expired state.
+			if c.hasStateLocked() && now.Sub(c.lastRenew) <= cp.s.LeaseTime {
+				return ErrClidInUse
+			}
+			m.destroyClientLocked(c)
+			or = m.byOwner[key]
+			if or == nil {
+				or = &ownerRecords{}
+				m.byOwner[key] = or
+			}
+		}
 		// A new client, or a client that restarted (new verifier).
 		// Create a new unconfirmed record. A previous confirmed
 		// record, if any, is kept until the new one is confirmed by
@@ -111,13 +128,16 @@ func (cp *compound) opExchangeID(d *xdr.Decoder, e *xdr.Encoder) Status {
 		cl = newClient(m.newClientID())
 		cl.ownerKey = key
 		cl.verifier = verifier
+		cl.cred = cp.req.Cred
+		cl.cred.GIDs = slices.Clone(cp.req.Cred.GIDs)
 		cl.lastRenew = now
 		or.unconfirmed = cl
 		m.clients[cl.id] = cl
 	}
-	info.ID = cl.id
-	cl.info = info
-	cl.lastRenew = now
+	if !cl.confirmed || flags&exchgidUpdConfirmedRecA != 0 {
+		info.ID = cl.id
+		cl.info = info
+	}
 
 	rflags := uint32(exchgidUseNonPNFS)
 	if cl.confirmed {
@@ -190,6 +210,10 @@ func (cp *compound) opCreateSession(d *xdr.Decoder, e *xdr.Encoder) Status {
 	cl := m.clients[clientID]
 	if cl == nil {
 		return ErrStaleClientID
+	}
+	// SP4_NONE permits other users after client ID confirmation.
+	if !cl.confirmed && !sameClientCred(cl.cred, cp.req.Cred) {
+		return ErrClidInUse
 	}
 	if seq == cl.csSeq-1 && cl.csReply != nil {
 		// A retransmission of the previous CREATE_SESSION.
