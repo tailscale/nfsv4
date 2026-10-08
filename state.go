@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -88,6 +89,7 @@ type client struct {
 	ownerKey  string
 	verifier  [verifierSize]byte
 	confirmed bool
+	cred      Cred // identity used by EXCHANGE_ID
 
 	// csSeq is the next expected CREATE_SESSION sequence ID, and
 	// csReply is the cached reply to the previous CREATE_SESSION (with
@@ -254,6 +256,25 @@ func newClient(id uint64) *client {
 		delegs:   make(map[stateOther]*delegState),
 		revoked:  make(map[stateOther]*delegState),
 	}
+}
+
+// sameClientCred compares the auth flavor and numeric user credentials.
+// The RPC stamp and machine name do not identify the user.
+func sameClientCred(a, b Cred) bool {
+	if a.Flavor != b.Flavor {
+		return false
+	}
+	if a.Flavor == oncrpc.AuthNone {
+		return true
+	}
+	return a.UID == b.UID && a.GID == b.GID && slices.Equal(a.GIDs, b.GIDs)
+}
+
+// hasStateLocked reports whether a client has session or file state.
+// The caller must hold the state manager lock.
+func (cl *client) hasStateLocked() bool {
+	return len(cl.sessions) != 0 || len(cl.opens) != 0 || len(cl.locks) != 0 ||
+		len(cl.delegs) != 0 || len(cl.revoked) != 0
 }
 
 // destroyClientLocked discards a client and all its state.
