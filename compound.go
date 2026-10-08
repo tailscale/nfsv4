@@ -8,12 +8,21 @@ import (
 	"fmt"
 	"runtime/debug"
 
+	"github.com/tailscale/nfsv4/internal/oncrpc"
 	"github.com/tailscale/nfsv4/internal/xdr"
 )
 
 // maxCompoundOps bounds the number of operations in a COMPOUND, before a
 // session's negotiated limit applies.
 const maxCompoundOps = 128
+
+// These limits include an AUTH_NONE RPC header and an empty COMPOUND tag.
+// The request has one SEQUENCE operation. The reply has one successful
+// SEQUENCE result. Neither limit includes a TCP record marker.
+const (
+	minSessionRequestSize  = 40 + 12 + 36
+	minSessionResponseSize = 24 + 12 + 44
+)
 
 // compound is the execution state of one COMPOUND procedure.
 type compound struct {
@@ -36,10 +45,11 @@ type compound struct {
 	cacheThis bool
 	replay    []byte // cached reply to send instead, for a replayed request
 
-	// maxResp is the maximum size of the COMPOUND reply, and replyStart
-	// is the offset of the reply in the reply encoder.
-	maxResp    int
-	replyStart int
+	// maxResp is the maximum size of the COMPOUND reply without its RPC
+	// header. replyStart is the reply's offset in the reply encoder.
+	maxResp        int
+	replyStart     int
+	replyHeaderLen int // RPC reply header, without the TCP record marker
 
 	curFH, savedFH FileHandle
 	curSID         *stateID
@@ -164,6 +174,8 @@ func isOp42(op Op) bool { return op >= OpAllocate && op <= OpRemoveXattr }
 func (cp *compound) run(args []byte, e *xdr.Encoder) {
 	start := e.Len()
 	cp.replyStart = start
+	cp.replyHeaderLen = start - oncrpc.RecordHeaderLen
+	cp.maxResp -= cp.replyHeaderLen
 	d := xdr.NewDecoder(args)
 	tag := d.Opaque(maxOpaque)
 	cp.minor = d.Uint32()
@@ -215,10 +227,15 @@ func (cp *compound) run(args []byte, e *xdr.Encoder) {
 		if status == OK && cp.numOps > maxCompoundOps {
 			status = ErrTooManyOps
 		}
-		if status == OK && e.Len()-start > cp.maxResp {
+		replySize := e.Len() - start
+		if i+1 < numOps {
+			// Leave room for the next operation's error result.
+			replySize += 8
+		}
+		if status == OK && replySize > cp.maxResp {
 			status = ErrRepTooBig
 		}
-		if status == OK && cp.cacheThis && cp.sess != nil && e.Len()-start > int(cp.sess.fore.maxResponseCached) {
+		if status == OK && cp.cacheThis && cp.sess != nil && replySize+cp.replyHeaderLen > int(cp.sess.fore.maxResponseCached) {
 			status = ErrRepTooBigToCache
 		}
 		if op == OpIllegal || opHandlers[op] == nil || (cp.minor < 2 && isOp42(op)) {
@@ -241,7 +258,7 @@ func (cp *compound) run(args []byte, e *xdr.Encoder) {
 	if cp.slot != nil && cp.cacheThis {
 		reply := e.Bytes()[start:]
 		cp.m.mu.Lock()
-		if cp.slot.seqid == cp.seqID && len(reply) <= int(cp.sess.fore.maxResponseCached) {
+		if cp.slot.seqid == cp.seqID && len(reply)+cp.replyHeaderLen <= int(cp.sess.fore.maxResponseCached) {
 			cp.slot.reply = append([]byte(nil), reply...)
 		}
 		cp.m.mu.Unlock()
