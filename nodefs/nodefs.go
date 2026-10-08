@@ -575,9 +575,15 @@ func (fs *FS) Lookup(r *nfsv4.Request, dir nfsv4.FileHandle, name string) (nfsv4
 
 // LookupParent implements nfsv4.FS.
 func (fs *FS) LookupParent(r *nfsv4.Request, dir nfsv4.FileHandle) (nfsv4.FileHandle, error) {
-	p, _, err := fs.resolve(r, dir)
+	p, n, err := fs.resolve(r, dir)
 	if err != nil {
 		return nil, err
+	}
+	if _, ok := n.(Dir); !ok {
+		if _, ok := n.(Symlink); ok {
+			return nil, nfsv4.ErrSymlink
+		}
+		return nil, nfsv4.ErrNotDir
 	}
 	parent, _ := path.Split(p)
 	return fs.handleFor(trimSlash(parent)), nil
