@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"unicode/utf8"
 
 	"github.com/tailscale/nfsv4/internal/oncrpc"
 	"github.com/tailscale/nfsv4/internal/xdr"
@@ -192,6 +193,13 @@ func (cp *compound) run(args []byte, e *xdr.Encoder) {
 	cp.s.stats.compounds.Add(1)
 	if cp.minor != 1 && cp.minor != 2 {
 		e.PutUint32At(statusOff, uint32(ErrMinorVersMismatch))
+		return
+	}
+	if !utf8.Valid(tag) {
+		// RFC 8881, Section 16.2.4: the tag must use UTF-8 encoding.
+		// Noncharacters have valid encodings. Section 14.1.5 does not
+		// prohibit the noncharacters in RFC 3454, Table C.4.
+		e.PutUint32At(statusOff, uint32(ErrInval))
 		return
 	}
 	cp.req.MinorVersion = cp.minor
