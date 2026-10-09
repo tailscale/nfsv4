@@ -261,6 +261,17 @@ type Request struct {
 // connection closes or the server shuts down.
 func (r *Request) Context() context.Context { return r.ctx }
 
+// WithContext returns a shallow copy of r with its context set to ctx.
+// It does not change r.
+func (r *Request) WithContext(ctx context.Context) *Request {
+	if ctx == nil {
+		panic("nfsv4: nil context")
+	}
+	r2 := *r
+	r2.ctx = ctx
+	return &r2
+}
+
 // Cred is an RPC credential.
 type Cred struct {
 	// Flavor is the RPC auth flavor: 0 (AUTH_NONE) or 1 (AUTH_SYS).
